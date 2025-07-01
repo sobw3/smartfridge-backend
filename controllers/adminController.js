@@ -12,8 +12,6 @@ exports.loginAdmin = async (req, res) => {
     }
 };
 
-// ... (todo o resto do código do adminController.js que já lhe enviei anteriormente permanece igual)
-// ... (pode manter o que já tem neste ficheiro, apenas a função de login foi ligeiramente ajustada para maior robustez)
 exports.createCondominium = async (req, res) => {
     const { name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment } = req.body;
     try {
