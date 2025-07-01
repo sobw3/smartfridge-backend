@@ -1,14 +1,12 @@
 // ===============================================================
-// ARQUIVO: index.js (Ponto de entrada principal do servidor)
-// Localização: smartfridge-backend/index.js
-// VERSÃO COM CORREÇÃO DE CORS
+// ARQUIVO: index.js (VERSÃO FINAL PARA PRODUÇÃO)
 // ===============================================================
 
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-// Importar as rotas
+// Importar todas as rotas
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
 const adminRoutes = require('./routes/adminRoutes');
@@ -19,18 +17,16 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// --- Middlewares Essenciais ---
-
-// ATUALIZAÇÃO: Configuração de CORS mais explícita
-// Isto diz ao nosso backend para aceitar pedidos explicitamente do nosso frontend
-// que roda em http://localhost:3000
+// --- Configuração do CORS (A MAIS IMPORTANTE) ---
+// Esta linha lê a variável de ambiente que configurou no Render.
+// Se a variável não existir, ele não permite que ninguém aceda.
 const corsOptions = {
-    origin: 'http://localhost:3000',
+    origin: process.env.CORS_ORIGIN, 
     optionsSuccessStatus: 200
 };
 app.use(cors(corsOptions));
 
-
+// --- Middlewares Essenciais ---
 app.use(express.json());
 
 // --- Rotas da API ---
@@ -40,7 +36,6 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/public', publicRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/webhooks', webhookRoutes);
-
 
 // Rota de teste
 app.get('/', (req, res) => {
