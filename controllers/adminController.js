@@ -5,15 +5,15 @@ exports.loginAdmin = async (req, res) => {
     const { username, password } = req.body;
     if (username === process.env.ADMIN_USER && password === process.env.ADMIN_PASSWORD) {
         const payload = { username: username, isAdmin: true };
-        jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' }, (err, token) => {
-            if (err) throw err;
-            res.json({ message: 'Login de admin bem-sucedido!', token });
-        });
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
+        res.json({ message: 'Login de admin bem-sucedido!', token });
     } else {
         res.status(401).json({ message: 'Credenciais de admin inválidas' });
     }
 };
 
+// ... (todo o resto do código do adminController.js que já lhe enviei anteriormente permanece igual)
+// ... (pode manter o que já tem neste ficheiro, apenas a função de login foi ligeiramente ajustada para maior robustez)
 exports.createCondominium = async (req, res) => {
     const { name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment } = req.body;
     try {
