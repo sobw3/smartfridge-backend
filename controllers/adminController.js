@@ -27,19 +27,12 @@ exports.createCondominium = async (req, res) => {
 
 // --- FUNÇÃO COM O TESTE DE DEPURAÇÃO ---
 exports.getCondominiums = async (req, res) => {
-    console.log('--- A TENTAR BUSCAR CONDOMÍNIOS ---');
-    console.log('A verificar a DATABASE_URL dentro do controller:', process.env.DATABASE_URL ? 'Definida' : 'NÃO DEFINIDA');
-    
     try {
         const allCondos = await pool.query("SELECT * FROM condominiums ORDER BY name ASC");
-        console.log('SUCESSO: Condomínios buscados.');
         res.status(200).json(allCondos.rows);
-    } catch (error) {
-        console.error('ERRO AO BUSCAR CONDOMÍNIOS:', error.message);
-        console.error('Stack do erro:', error.stack);
-        res.status(500).json({ message: 'Falha ao buscar condominiums no servidor.', error: error.message });
-    }
+    } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
 // --- FIM DA FUNÇÃO COM O TESTE ---
 
 exports.updateCondominium = async (req, res) => {
