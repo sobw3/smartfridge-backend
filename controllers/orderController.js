@@ -5,7 +5,8 @@ const crypto = require('crypto');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
-exports.createOrder = async (req, res) => {
+// Função para criar um pedido e gerar um pagamento PIX
+exports.createPixOrder = async (req, res) => {
     const { items, user } = req.body;
     if (!items || items.length === 0 || !user) {
         return res.status(400).json({ message: 'Dados do pedido inválidos.' });
@@ -49,6 +50,7 @@ exports.createOrder = async (req, res) => {
     }
 };
 
+// Função para processar um pagamento com Cartão de Crédito
 exports.createCardOrder = async (req, res) => {
     const { items, user, token, issuer_id, payment_method_id, installments } = req.body;
 
