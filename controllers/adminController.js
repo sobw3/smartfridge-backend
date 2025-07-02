@@ -1,6 +1,8 @@
 const pool = require('../db');
 const jwt = require('jsonwebtoken');
 
+// ... (as outras funções como loginAdmin, createCondominium, etc. permanecem iguais)
+
 exports.loginAdmin = async (req, res) => {
     const { username, password } = req.body;
     if (username === process.env.ADMIN_USER && password === process.env.ADMIN_PASSWORD) {
@@ -23,12 +25,22 @@ exports.createCondominium = async (req, res) => {
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
 
+// --- FUNÇÃO COM O TESTE DE DEPURAÇÃO ---
 exports.getCondominiums = async (req, res) => {
+    console.log('--- A TENTAR BUSCAR CONDOMÍNIOS ---');
+    console.log('A verificar a DATABASE_URL dentro do controller:', process.env.DATABASE_URL ? 'Definida' : 'NÃO DEFINIDA');
+    
     try {
         const allCondos = await pool.query("SELECT * FROM condominiums ORDER BY name ASC");
+        console.log('SUCESSO: Condomínios buscados.');
         res.status(200).json(allCondos.rows);
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        console.error('ERRO AO BUSCAR CONDOMÍNIOS:', error.message);
+        console.error('Stack do erro:', error.stack);
+        res.status(500).json({ message: 'Falha ao buscar condominiums no servidor.', error: error.message });
+    }
 };
+// --- FIM DA FUNÇÃO COM O TESTE ---
 
 exports.updateCondominium = async (req, res) => {
     const { id } = req.params;
@@ -49,6 +61,8 @@ exports.deleteCondominium = async (req, res) => {
         res.status(200).json({ message: 'Condomínio apagado com sucesso.' });
     } catch (error) { res.status(500).json({ message: error.message }); }
 };
+
+// ... (o resto do ficheiro continua igual)
 
 exports.createProduct = async (req, res) => {
     const { name, description, image_url, purchase_price, sale_price, critical_stock_level } = req.body;
