@@ -1,4 +1,4 @@
-const jwt = require('jsonwebtoken');
+[⚠️ Suspicious Content] const jwt = require('jsonwebtoken');
 const pool = require('../db');
 
 exports.protect = async (req, res, next) => {
