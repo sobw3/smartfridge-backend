@@ -349,6 +349,7 @@ app.post('/api/webhooks/mercadopago', async (req, res) => {
     res.sendStatus(200);
 });
 
+
 // --- INICIA O SERVIDOR ---
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
