@@ -1,216 +1,197 @@
 const pool = require('../db');
-const jwt = require('jsonwebtoken');
+const { MercadoPagoConfig, Payment } = require('mercadopago');
+const crypto = require('crypto');
 
-// ... (as outras funções como loginAdmin, createCondominium, etc. permanecem iguais)
+const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
+const payment = new Payment(client);
 
-exports.loginAdmin = async (req, res) => {
-    const { username, password } = req.body;
-    if (username === process.env.ADMIN_USER && password === process.env.ADMIN_PASSWORD) {
-        const payload = { username: username, isAdmin: true };
-        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '8h' });
-        res.json({ message: 'Login de admin bem-sucedido!', token });
-    } else {
-        res.status(401).json({ message: 'Credenciais de admin inválidas' });
+exports.createPixOrder = async (req, res) => {
+    const { items, user } = req.body;
+    if (!items || items.length === 0 || !user) {
+        return res.status(400).json({ message: 'Dados do pedido inválidos.' });
     }
-};
-
-exports.createCondominium = async (req, res) => {
-    const { name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment } = req.body;
     try {
-        const newCondo = await pool.query(
-            "INSERT INTO condominiums (name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            [name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment]
+        let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
+        
+        const newOrder = await pool.query(
+            'INSERT INTO orders (user_id, condo_id, total_amount, status, payment_method) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [user.id, user.condoId, totalAmount, 'pending', 'pix']
         );
-        res.status(201).json(newCondo.rows[0]);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+        const orderId = newOrder.rows[0].id;
 
-// --- FUNÇÃO COM O TESTE DE DEPURAÇÃO ---
-exports.getCondominiums = async (req, res) => {
-    try {
-        const allCondos = await pool.query("SELECT * FROM condominiums ORDER BY name ASC");
-        res.status(200).json(allCondos.rows);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+        for (const item of items) {
+            await pool.query(
+                'INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)',
+                [orderId, item.id, item.quantity, item.sale_price]
+            );
+        }
 
-// --- FIM DA FUNÇÃO COM O TESTE ---
+        const paymentData = {
+            body: {
+                transaction_amount: totalAmount,
+                description: `Pedido #${orderId} - SmartFridge Brasil`,
+                payment_method_id: 'pix',
+                payer: { email: user.email, first_name: user.name },
+                external_reference: orderId.toString(),
+            }
+        };
 
-exports.updateCondominium = async (req, res) => {
-    const { id } = req.params;
-    const { name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment } = req.body;
-    try {
-        const updatedCondo = await pool.query(
-            "UPDATE condominiums SET name = $1, address = $2, syndic_name = $3, syndic_contact = $4, syndic_profit_percentage = $5, initial_investment = $6 WHERE id = $7 RETURNING *",
-            [name, address, syndic_name, syndic_contact, syndic_profit_percentage, initial_investment, id]
-        );
-        res.status(200).json(updatedCondo.rows[0]);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
+        const result = await payment.create(paymentData);
+        res.status(201).json({
+            orderId: orderId,
+            pix_qr_code: result.point_of_interaction.transaction_data.qr_code_base64,
+            pix_qr_code_text: result.point_of_interaction.transaction_data.qr_code
+        });
 
-exports.deleteCondominium = async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.query("DELETE FROM condominiums WHERE id = $1", [id]);
-        res.status(200).json({ message: 'Condomínio apagado com sucesso.' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-// ... (o resto do ficheiro continua igual)
-
-exports.createProduct = async (req, res) => {
-    const { name, description, image_url, purchase_price, sale_price, critical_stock_level } = req.body;
-    try {
-        const newProduct = await pool.query(
-            "INSERT INTO products (name, description, image_url, purchase_price, sale_price, critical_stock_level) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
-            [name, description, image_url, purchase_price, sale_price, critical_stock_level]
-        );
-        res.status(201).json(newProduct.rows[0]);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-exports.getProducts = async (req, res) => {
-    try {
-        const allProducts = await pool.query("SELECT * FROM products ORDER BY name ASC");
-        res.status(200).json(allProducts.rows);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-exports.updateProduct = async (req, res) => {
-    const { id } = req.params;
-    const { name, description, image_url, purchase_price, sale_price, critical_stock_level } = req.body;
-    try {
-        const updatedProduct = await pool.query(
-            "UPDATE products SET name = $1, description = $2, image_url = $3, purchase_price = $4, sale_price = $5, critical_stock_level = $6 WHERE id = $7 RETURNING *",
-            [name, description, image_url, purchase_price, sale_price, critical_stock_level, id]
-        );
-        res.status(200).json(updatedProduct.rows[0]);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-exports.deleteProduct = async (req, res) => {
-    const { id } = req.params;
-    try {
-        await pool.query("DELETE FROM products WHERE id = $1", [id]);
-        res.status(200).json({ message: 'Produto apagado com sucesso.' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-exports.getInventoryByCondo = async (req, res) => {
-    const { condoId } = req.query;
-    try {
-        const query = `
-            SELECT p.*, COALESCE(i.quantity, 0) as quantity
-            FROM products p
-            LEFT JOIN inventory i ON p.id = i.product_id AND i.condo_id = $1
-            ORDER BY p.name;
-        `;
-        const inventory = await pool.query(query, [condoId]);
-        res.status(200).json(inventory.rows);
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-exports.updateInventory = async (req, res) => {
-    const { condo_id, product_id, quantity } = req.body;
-    try {
-        const upsertQuery = `
-            INSERT INTO inventory (condo_id, product_id, quantity)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (condo_id, product_id)
-            DO UPDATE SET quantity = EXCLUDED.quantity;
-        `;
-        await pool.query(upsertQuery, [condo_id, product_id, quantity]);
-        res.status(200).json({ message: 'Inventário atualizado com sucesso.' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
-};
-
-exports.getProfitReport = async (req, res) => {
-    try {
-        const query = `
-            SELECT
-                c.id,
-                c.name,
-                c.initial_investment,
-                c.syndic_profit_percentage,
-                COALESCE(SUM(oi.price_at_purchase * oi.quantity), 0) AS gross_revenue,
-                COALESCE(SUM(p.purchase_price * oi.quantity), 0) AS cost_of_goods_sold,
-                COALESCE(SUM((oi.price_at_purchase - p.purchase_price) * oi.quantity), 0) AS net_revenue,
-                COALESCE(SUM(((oi.price_at_purchase - p.purchase_price) * oi.quantity) * (c.syndic_profit_percentage / 100.0)), 0) AS syndic_commission
-            FROM condominiums c
-            LEFT JOIN orders o ON c.id = o.condo_id AND o.status = 'paid'
-            LEFT JOIN order_items oi ON o.id = oi.order_id
-            LEFT JOIN products p ON oi.product_id = p.id
-            GROUP BY c.id
-            ORDER BY c.name;
-        `;
-        const { rows } = await pool.query(query);
-        res.status(200).json(rows);
     } catch (error) {
-        console.error("Erro ao gerar relatório de lucros:", error);
-        res.status(500).json({ message: error.message });
+        console.error('Erro ao criar pedido PIX:', error);
+        const errorMessage = error.cause?.message || error.message || 'Falha ao criar pedido PIX.';
+        res.status(500).json({ message: errorMessage });
     }
 };
 
-exports.getSalesSummary = async (req, res) => {
-    const { condoId } = req.query;
-    if (!condoId) {
-        return res.status(400).json({ message: 'O ID do condomínio é obrigatório.' });
+exports.createCardOrder = async (req, res) => {
+    const { items, user, token, issuer_id, payment_method_id, installments } = req.body;
+
+    if (!items || !token || !payment_method_id || !user) {
+        return res.status(400).json({ message: 'Dados de pagamento incompletos.' });
     }
+
+    const clientDB = await pool.connect();
+
     try {
-        const query = `
-            SELECT
-                COUNT(*) AS sales_count,
-                SUM(total_amount) AS total_revenue
-            FROM orders
-            WHERE
-                condo_id = $1 AND
-                status = 'paid' AND
-                created_at >= CURRENT_DATE AND
-                created_at < CURRENT_DATE + INTERVAL '1 day';
-        `;
-        const { rows } = await pool.query(query, [condoId]);
-        res.status(200).json(rows[0] || { sales_count: '0', total_revenue: '0' });
+        await clientDB.query('BEGIN');
+
+        let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
+
+        const newOrder = await clientDB.query(
+            'INSERT INTO orders (user_id, condo_id, total_amount, status, payment_method) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+            [user.id, user.condoId, totalAmount, 'pending', 'card']
+        );
+        const orderId = newOrder.rows[0].id;
+
+        for (const item of items) {
+            await clientDB.query(
+                'INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)',
+                [orderId, item.id, item.quantity, item.sale_price]
+            );
+        }
+
+        const paymentData = {
+            body: {
+                transaction_amount: totalAmount,
+                description: `Pedido #${orderId} - SmartFridge Brasil`,
+                token: token,
+                installments: installments,
+                payment_method_id: payment_method_id,
+                issuer_id: issuer_id,
+                payer: { email: user.email, first_name: user.name },
+                external_reference: orderId.toString(),
+            }
+        };
+
+        const paymentResult = await payment.create(paymentData);
+
+        if (paymentResult.status === 'approved') {
+            await clientDB.query('UPDATE orders SET status = $1, payment_gateway_id = $2 WHERE id = $3', ['paid', paymentResult.id, orderId]);
+            
+            for (const item of items) {
+                await clientDB.query(
+                    'UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3',
+                    [item.quantity, item.id, user.condoId]
+                );
+            }
+
+            const unlockToken = crypto.randomBytes(16).toString('hex');
+            const expires_at = new Date(Date.now() + 5 * 60 * 1000);
+            await clientDB.query(
+                'INSERT INTO unlock_tokens (token, order_id, expires_at) VALUES ($1, $2, $3)',
+                [unlockToken, orderId, expires_at]
+            );
+
+            await clientDB.query('COMMIT');
+            res.status(201).json({ status: 'approved', unlockToken: unlockToken });
+
+        } else {
+            await clientDB.query('ROLLBACK');
+            res.status(400).json({ status: paymentResult.status, message: paymentResult.status_detail });
+        }
+
     } catch (error) {
-        console.error("ERRO AO BUSCAR RESUMO DE VENDAS:", error);
-        res.status(500).json({ message: error.message });
+        await clientDB.query('ROLLBACK');
+        console.error('Erro no pagamento com cartão:', error);
+        const errorMessage = error.cause?.message || error.message || 'Falha ao processar pagamento com cartão.';
+        res.status(500).json({ message: errorMessage });
+    } finally {
+        clientDB.release();
     }
 };
 
-exports.getSalesLog = async (req, res) => {
-    const { condoId } = req.query;
-    if (!condoId) {
-        return res.status(400).json({ message: 'O ID do condomínio é obrigatório.' });
-    }
+exports.simulatePaymentApproval = async (req, res) => {
+    const { orderId } = req.params;
     try {
-        const query = `
-            SELECT
-                o.id,
-                o.total_amount,
-                o.status,
-                o.payment_method,
-                o.created_at,
-                u.name AS user_name,
-                u.cpf AS user_cpf,
-                COALESCE(
-                    json_agg(
-                        json_build_object(
-                            'product_name', p.name,
-                            'quantity', oi.quantity,
-                            'price', oi.price_at_purchase
-                        )
-                    ) FILTER (WHERE oi.id IS NOT NULL), '[]'::json
-                ) AS items
-            FROM orders o
-            JOIN users u ON o.user_id = u.id
-            LEFT JOIN order_items oi ON o.id = oi.order_id
-            LEFT JOIN products p ON oi.product_id = p.id
-            WHERE o.condo_id = $1 AND o.status = 'paid'
-            GROUP BY o.id, u.name, u.cpf
-            ORDER BY o.created_at DESC;
-        `;
-        const { rows } = await pool.query(query, [condoId]);
-        res.status(200).json(rows);
+        const updatedOrder = await pool.query(
+            'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
+            ['paid', orderId]
+        );
+        if (updatedOrder.rows.length === 0) {
+            return res.status(404).json({ message: 'Pedido não encontrado para simulação.' });
+        }
+        const orderItems = await pool.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
+        const condoId = updatedOrder.rows[0].condo_id;
+        for (const item of orderItems.rows) {
+            await pool.query(
+                'UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3',
+                [item.quantity, item.product_id, condoId]
+            );
+        }
+        const token = crypto.randomBytes(16).toString('hex');
+        const expires_at = new Date(Date.now() + 5 * 60 * 1000);
+        await pool.query(
+            'INSERT INTO unlock_tokens (token, order_id, expires_at) VALUES ($1, $2, $3)',
+            [token, orderId, expires_at]
+        );
+        res.status(200).json({
+            message: 'Pagamento simulado e token gerado com sucesso.',
+            unlockToken: token
+        });
     } catch (error) {
-        console.error("ERRO AO BUSCAR LOG DE VENDAS:", error);
-        res.status(500).json({ message: error.message });
+        console.error('Erro na simulação de pagamento:', error);
+        res.status(500).json({ message: 'Erro interno ao simular pagamento.' });
+    }
+};
+
+exports.getOrderStatus = async (req, res) => {
+    const { orderId } = req.params;
+    const userId = req.user.id;
+
+    try {
+        const orderResult = await pool.query(
+            'SELECT status FROM orders WHERE id = $1 AND user_id = $2',
+            [orderId, userId]
+        );
+
+        if (orderResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Pedido não encontrado.' });
+        }
+
+        const { status } = orderResult.rows[0];
+        let unlockToken = null;
+
+        if (status === 'paid') {
+            const tokenResult = await pool.query(
+                'SELECT token FROM unlock_tokens WHERE order_id = $1 AND is_used = false',
+                [orderId]
+            );
+            if (tokenResult.rows.length > 0) {
+                unlockToken = tokenResult.rows[0].token;
+            }
+        }
+
+        res.status(200).json({ status, unlockToken });
+
+    } catch (error) {
+        console.error('Erro ao verificar status do pedido:', error);
+        res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 };

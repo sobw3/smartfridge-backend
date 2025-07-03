@@ -1,21 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const adminController = require('../controllers/adminController');
-const { protectAdmin } = require('../middleware/authMiddleware');
+const orderController = require('../controllers/orderController');
+const { protect } = require('../middleware/authMiddleware');
 
-router.post('/login', adminController.loginAdmin);
-router.post('/condominiums', protectAdmin, adminController.createCondominium);
-router.get('/condominiums', protectAdmin, adminController.getCondominiums);
-router.put('/condominiums/:id', protectAdmin, adminController.updateCondominium);
-router.delete('/condominiums/:id', protectAdmin, adminController.deleteCondominium);
-router.post('/products', protectAdmin, adminController.createProduct);
-router.get('/products', protectAdmin, adminController.getProducts);
-router.put('/products/:id', protectAdmin, adminController.updateProduct);
-router.delete('/products/:id', protectAdmin, adminController.deleteProduct);
-router.get('/inventory', protectAdmin, adminController.getInventoryByCondo);
-router.post('/inventory', protectAdmin, adminController.updateInventory);
-router.get('/profits', protectAdmin, adminController.getProfitReport);
-router.get('/sales/summary', protectAdmin, adminController.getSalesSummary);
-router.get('/sales/log', protectAdmin, adminController.getSalesLog);
+router.post('/create-pix', orderController.createPixOrder);
+router.post('/create-card', protect, orderController.createCardOrder);
+router.post('/:orderId/simulate-payment', orderController.simulatePaymentApproval);
+router.get('/:orderId/status', protect, orderController.getOrderStatus);
 
 module.exports = router;
