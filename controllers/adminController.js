@@ -162,7 +162,9 @@ exports.getSalesSummary = async (req, res) => {
         `;
         const { rows } = await pool.query(query, [condoId]);
         res.status(200).json(rows[0] || { sales_count: '0', total_revenue: '0' });
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
 
 exports.getSalesLog = async (req, res) => {
@@ -199,5 +201,7 @@ exports.getSalesLog = async (req, res) => {
         `;
         const { rows } = await pool.query(query, [condoId]);
         res.status(200).json(rows);
-    } catch (error) { res.status(500).json({ message: error.message }); }
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
 };
