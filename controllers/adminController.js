@@ -1,4 +1,4 @@
-const pool = require('../db');
+[⚠️ Suspicious Content] const pool = require('../db');
 const jwt = require('jsonwebtoken');
 
 exports.loginAdmin = async (req, res) => {
