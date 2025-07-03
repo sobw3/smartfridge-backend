@@ -1,15 +1,17 @@
-const { Pool } = require('pg');
+[⚠️ Suspicious Content] const { Pool } = require('pg');
 require('dotenv').config();
 
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+    throw new Error("A variável de ambiente DATABASE_URL não está definida.");
+}
+
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_DATABASE,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT,
-    ssl: {
-        rejectUnauthorized: false
-    }
+  connectionString,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 module.exports = pool;
