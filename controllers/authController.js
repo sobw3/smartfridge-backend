@@ -1,0 +1,176 @@
+const pool = require('../db');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+
+const validateCPF = (cpf) => {
+    cpf = cpf.replace(/[^\d]+/g,'');
+    if(cpf === '') return false;
+    if (cpf.length !== 11 || /^(\d)\1+$/.test(cpf)) return false;
+    let add = 0;
+    for (let i=0; i < 9; i ++) add += parseInt(cpf.charAt(i)) * (10 - i);
+    let rev = 11 - (add % 11);
+    if (rev === 10 || rev === 11) rev = 0;
+    if (rev !== parseInt(cpf.charAt(9))) return false;
+    add = 0;
+    for (let i = 0; i < 10; i ++) add += parseInt(cpf.charAt(i)) * (11 - i);
+    rev = 11 - (add % 11);
+    if (rev === 10 || rev === 11) rev = 0;
+    if (rev !== parseInt(cpf.charAt(10))) return false;
+    return true;
+};
+
+exports.register = async (req, res) => {
+    const { name, cpf, email, password, birth_date, condo_id } = req.body;
+    if (!name || !cpf || !email || !password || !birth_date || !condo_id) {
+        return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
+    }
+    if (!validateCPF(cpf)) {
+        return res.status(400).json({ message: 'CPF inválido.' });
+    }
+    try {
+        const userExists = await pool.query("SELECT * FROM users WHERE cpf = $1 OR email = $2", [cpf, email]);
+        if (userExists.rows.length > 0) {
+            return res.status(409).json({ message: 'CPF ou e-mail já cadastrado.' });
+        }
+        const salt = await bcrypt.genSalt(10);
+        const password_hash = await bcrypt.hash(password, salt);
+        const newUser = await pool.query(
+            "INSERT INTO users (name, cpf, email, password_hash, birth_date, condo_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email",
+            [name, cpf, email, password_hash, birth_date, condo_id]
+        );
+        res.status(201).json({ message: 'Usuário cadastrado com sucesso!', user: newUser.rows[0] });
+    } catch (error) {
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+};
+
+exports.login = async (req, res) => {
+    const { cpf, password } = req.body;
+    if (!cpf || !password) {
+        return res.status(400).json({ message: 'CPF e senha são obrigatórios.' });
+    }
+    try {
+        const userResult = await pool.query("SELECT * FROM users WHERE cpf = $1", [cpf]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Usuário não encontrado.' });
+        }
+        const user = userResult.rows[0];
+        const isMatch = await bcrypt.compare(password, user.password_hash);
+        if (!isMatch) {
+            return res.status(401).json({ message: 'CPF ou senha inválidos.' });
+        }
+        const payload = {
+            user: {
+                id: user.id,
+                name: user.name,
+                condoId: user.condo_id,
+                email: user.email,
+                cpf: user.cpf
+            }
+        };
+        jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
+            if (err) throw err;
+            res.json({ message: 'Login bem-sucedido!', token, user: payload.user });
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+};
+
+exports.getMe = async (req, res) => {
+    try {
+        const userResult = await pool.query('SELECT id, name, email, condo_id, cpf FROM users WHERE id = $1', [req.user.id]);
+        if (userResult.rows.length === 0) {
+            return res.status(404).json({ message: 'Utilizador do token não encontrado.' });
+        }
+        const user = userResult.rows[0];
+        const userPayload = { id: user.id, name: user.name, email: user.email, condoId: user.condo_id, cpf: user.cpf };
+        res.status(200).json(userPayload);
+    } catch (error) {
+        res.status(500).json({ message: 'Erro ao buscar dados do utilizador.' });
+    }
+};
+
+exports.updateUserCondo = async (req, res) => {
+    const userId = req.user.id;
+    const { condoId } = req.body;
+    if (!condoId) {
+        return res.status(400).json({ message: 'O ID do condomínio é obrigatório.' });
+    }
+    try {
+        const updatedUser = await pool.query(
+            'UPDATE users SET condo_id = $1 WHERE id = $2 RETURNING id, name, email, condo_id, cpf',
+            [condoId, userId]
+        );
+        if (updatedUser.rows.length === 0) {
+            return res.status(404).json({ message: 'Utilizador não encontrado.' });
+        }
+        const user = updatedUser.rows[0];
+        const userPayload = { id: user.id, name: user.name, email: user.email, condoId: user.condo_id, cpf: user.cpf };
+        res.status(200).json({ message: 'Condomínio atualizado com sucesso!', user: userPayload });
+    } catch (error) {
+        res.status(500).json({ message: 'Erro interno ao atualizar condomínio.' });
+    }
+};
+
+exports.updateMe = async (req, res) => {
+    const userId = req.user.id;
+    const { name, email, password, newPassword } = req.body;
+    if (!name || !email) return res.status(400).json({ message: 'Nome e e-mail são obrigatórios.' });
+    try {
+        const emailExists = await pool.query('SELECT id FROM users WHERE email = $1 AND id != $2', [email, userId]);
+        if (emailExists.rows.length > 0) return res.status(409).json({ message: 'Este e-mail já está em uso por outra conta.' });
+        let passwordHash = null;
+        if (newPassword) {
+            if (!password) return res.status(400).json({ message: 'A senha atual é necessária para definir uma nova.' });
+            const userResult = await pool.query('SELECT password_hash FROM users WHERE id = $1', [userId]);
+            const user = userResult.rows[0];
+            const isMatch = await bcrypt.compare(password, user.password_hash);
+            if (!isMatch) return res.status(401).json({ message: 'A senha atual está incorreta.' });
+            const salt = await bcrypt.genSalt(10);
+            passwordHash = await bcrypt.hash(newPassword, salt);
+        }
+        let query;
+        let queryParams;
+        if (passwordHash) {
+            query = 'UPDATE users SET name = $1, email = $2, password_hash = $3 WHERE id = $4 RETURNING id, name, email, condo_id, cpf';
+            queryParams = [name, email, passwordHash, userId];
+        } else {
+            query = 'UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING id, name, email, condo_id, cpf';
+            queryParams = [name, email, userId];
+        }
+        const { rows } = await pool.query(query, queryParams);
+        if (rows.length === 0) return res.status(404).json({ message: 'Utilizador não encontrado.' });
+        const user = rows[0];
+        const userPayload = { id: user.id, name: user.name, email: user.email, condoId: user.condo_id, cpf: user.cpf };
+        res.status(200).json({ message: 'Dados atualizados com sucesso!', user: userPayload });
+    } catch (error) {
+        res.status(500).json({ message: 'Erro interno ao atualizar os dados.' });
+    }
+};
+
+exports.verifyUserForReset = async (req, res) => {
+    const { cpf, birth_date } = req.body;
+    if (!cpf || !birth_date) return res.status(400).json({ message: 'CPF e data de nascimento são obrigatórios.' });
+    try {
+        const userResult = await pool.query("SELECT id FROM users WHERE cpf = $1 AND to_char(birth_date, 'YYYY-MM-DD') = $2", [cpf, birth_date]);
+        if (userResult.rows.length === 0) return res.status(404).json({ message: 'Os dados não correspondem a nenhuma conta existente.' });
+        res.status(200).json({ message: 'Utilizador verificado com sucesso.' });
+    } catch (error) {
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+};
+
+exports.resetPassword = async (req, res) => {
+    const { cpf, newPassword } = req.body;
+    if (!cpf || !newPassword || newPassword.length < 6) return res.status(400).json({ message: 'CPF e uma nova senha com pelo menos 6 caracteres são obrigatórios.' });
+    try {
+        const salt = await bcrypt.genSalt(10);
+        const password_hash = await bcrypt.hash(newPassword, salt);
+        const result = await pool.query("UPDATE users SET password_hash = $1 WHERE cpf = $2", [password_hash, cpf]);
+        if (result.rowCount === 0) return res.status(404).json({ message: 'Utilizador não encontrado para alterar a senha.' });
+        res.status(200).json({ message: 'Senha alterada com sucesso!' });
+    } catch (error) {
+        res.status(500).json({ message: 'Erro interno do servidor.' });
+    }
+};
