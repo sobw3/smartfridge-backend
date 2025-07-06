@@ -44,3 +44,15 @@ exports.protectAdmin = (req, res, next) => {
         return res.status(401).json({ message: 'Não autorizado, sem token de admin' });
     }
 };
+
+// --- NOVO MIDDLEWARE PARA A GELADEIRA ---
+exports.protectFridge = (req, res, next) => {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey) {
+        return res.status(401).json({ message: 'API Key em falta.' });
+    }
+    if (apiKey !== process.env.FRIDGE_API_KEY) {
+        return res.status(403).json({ message: 'API Key inválida.' });
+    }
+    next();
+};
