@@ -205,3 +205,24 @@ exports.getSalesLog = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// --- NOVA FUNÇÃO PARA CONTAR UTILIZADORES POR CONDOMÍNIO ---
+exports.getUsersByCondo = async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                c.id, 
+                c.name, 
+                COUNT(u.id) as user_count 
+            FROM condominiums c 
+            LEFT JOIN users u ON c.id = u.condo_id 
+            GROUP BY c.id 
+            ORDER BY c.name;
+        `;
+        const { rows } = await pool.query(query);
+        res.status(200).json(rows);
+    } catch (error) {
+        console.error("Erro ao buscar contagem de utilizadores:", error);
+        res.status(500).json({ message: 'Erro ao buscar contagem de utilizadores.' });
+    }
+};
