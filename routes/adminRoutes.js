@@ -17,6 +17,5 @@ router.post('/inventory', protectAdmin, adminController.updateInventory);
 router.get('/profits', protectAdmin, adminController.getProfitReport);
 router.get('/sales/summary', protectAdmin, adminController.getSalesSummary);
 router.get('/sales/log', protectAdmin, adminController.getSalesLog);
-router.get('/users-by-condo', protectAdmin, adminController.getUsersByCondo);
 
 module.exports = router;
