@@ -5,6 +5,18 @@ const crypto = require('crypto');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
+// Função auxiliar para criar a descrição detalhada
+const createPaymentDescription = async (items, user) => {
+    const condoResult = await pool.query('SELECT name FROM condominiums WHERE id = $1', [user.condoId]);
+    const condoName = condoResult.rows[0]?.name || 'Condomínio';
+    const itemsSummary = items.map(item => `${item.quantity}x ${item.name}`).join(', ');
+    
+    // Limita a descrição para evitar erros no Mercado Pago
+    const fullDescription = `[${condoName}] ${itemsSummary}`;
+    return fullDescription.substring(0, 255); 
+};
+
+
 exports.createPixOrder = async (req, res) => {
     const { items, user } = req.body;
     if (!items || items.length === 0 || !user || !user.cpf) {
@@ -26,10 +38,12 @@ exports.createPixOrder = async (req, res) => {
             );
         }
 
+        const description = await createPaymentDescription(items, user);
+
         const paymentData = {
             body: {
                 transaction_amount: totalAmount,
-                description: `Pedido #${orderId} - SmartFridge Brasil`,
+                description: description, // <-- ALTERAÇÃO AQUI
                 payment_method_id: 'pix',
                 payer: {
                     email: user.email,
@@ -38,22 +52,11 @@ exports.createPixOrder = async (req, res) => {
                     identification: {
                         type: 'CPF',
                         number: user.cpf.replace(/\D/g, '')
-                    },
-                    address: {
-                        zip_code: '01234-567',
-                        street_name: 'Av. Exemplo',
-                        street_number: '987',
-                        neighborhood: 'Centro',
-                        city: 'São Paulo',
-                        federal_unit: 'SP'
                     }
                 },
                 external_reference: orderId.toString(),
             }
         };
-
-        // --- LINHA DE DEPURAÇÃO ADICIONADA ---
-        console.log("A ENVIAR PARA O MERCADO PAGO:", JSON.stringify(paymentData, null, 2));
 
         const result = await payment.create(paymentData);
         res.status(201).json({
@@ -89,10 +92,13 @@ exports.createCardOrder = async (req, res) => {
                 [orderId, item.id, item.quantity, item.sale_price]
             );
         }
+
+        const description = await createPaymentDescription(items, user);
+
         const paymentData = {
             body: {
                 transaction_amount: totalAmount,
-                description: `Pedido #${orderId} - SmartFridge Brasil`,
+                description: description, // <-- ALTERAÇÃO AQUI
                 token: token,
                 installments: installments,
                 payment_method_id: payment_method_id,
