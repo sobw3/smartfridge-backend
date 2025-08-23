@@ -1,4 +1,3 @@
-// sobw3/backendsmart/backendsmart-a691fbac7367ed29d2e67cae6bd0bd5ddac8ecef/adminController.js
 
 const pool = require('../db');
 const jwt = require('jsonwebtoken');
@@ -406,3 +405,4 @@ exports.toggleUserStatus = async (req, res) => {
         res.status(500).json({ message: 'Erro ao alterar status do usuário.' });
     }
 };
+

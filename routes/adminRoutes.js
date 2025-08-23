@@ -21,7 +21,7 @@ router.get('/products', protectAdmin, adminController.getProducts);
 router.put('/products/:id', protectAdmin, adminController.updateProduct);
 router.delete('/products/:id', protectAdmin, adminController.deleteProduct);
 
-// PONTO 2: Rota para buscar promoções (já existia, mas confirmando)
+// Rota para buscar promoções
 router.get('/promotions/daily', protectAdmin, promotionController.getDailyPromotions);
 
 
@@ -46,6 +46,7 @@ router.post('/users/:userId/tickets', protectAdmin, ticketController.createTicke
 router.get('/users/:userId/tickets', protectAdmin, ticketController.getTicketsForUserByAdmin);
 router.delete('/tickets/:ticketId', protectAdmin, ticketController.deleteTicketByAdmin);
 
+// Faturas (Admin)
 router.get('/users/:userId/invoices', protectAdmin, creditController.getInvoicesForUser);
 
 module.exports = router;
