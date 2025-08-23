@@ -73,3 +73,23 @@ CREATE TABLE unlock_tokens (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     expires_at TIMESTAMP WITH TIME ZONE
 );
+
+-- Adicionando a coluna de saldo na tabela de usuários (se ainda não existir)
+-- Acredito que já exista, mas é uma boa prática garantir.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC(10, 2) NOT NULL DEFAULT 0.00;
+
+-- Criando um tipo ENUM para os tipos de transação da carteira
+CREATE TYPE wallet_transaction_type AS ENUM ('deposit', 'purchase');
+
+-- Tabela para o histórico de transações da carteira digital
+CREATE TABLE wallet_transactions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    type wallet_transaction_type NOT NULL,
+    amount NUMERIC(10, 2) NOT NULL,
+    related_order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Adicionando um comentário na tabela para clareza
+COMMENT ON TABLE wallet_transactions IS 'Registra cada depósito ou compra feita com a carteira digital de um usuário.';

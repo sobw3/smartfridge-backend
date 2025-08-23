@@ -1,9 +1,6 @@
-// ===============================================================
-// ARQUIVO: controllers/productController.js (VERSÃO COM DEPURAÇÃO)
-// ===============================================================
 const pool = require('../db');
 
-// --- Função para buscar produtos por condomínio (sem alterações) ---
+// --- Função para buscar produtos por condomínio (MODIFICADA) ---
 exports.getProductsByCondo = async (req, res) => {
     const { condoId } = req.query;
 
@@ -12,21 +9,36 @@ exports.getProductsByCondo = async (req, res) => {
     }
 
     try {
+        // Query inteligente que verifica se a promoção está ativa
         const query = `
             SELECT
                 p.id,
                 p.name,
                 p.description,
                 p.image_url,
-                p.sale_price,
-                i.quantity AS stock
+                i.quantity AS stock,
+                CASE
+                    WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
+                    THEN p.promotional_price
+                    ELSE p.sale_price
+                END AS sale_price,
+                CASE
+                    WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
+                    THEN p.sale_price
+                    ELSE NULL
+                END AS original_price,
+                CASE
+                    WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
+                    THEN p.promotion_end_date
+                    ELSE NULL
+                END AS promotion_end_date
             FROM products AS p
             JOIN inventory AS i ON p.id = i.product_id
             WHERE i.condo_id = $1 AND i.quantity > 0
+            ORDER BY p.name ASC;
         `;
 
         const productsResult = await pool.query(query, [condoId]);
-
         res.status(200).json(productsResult.rows);
 
     } catch (error) {
@@ -35,14 +47,9 @@ exports.getProductsByCondo = async (req, res) => {
     }
 };
 
-// --- FUNÇÃO DE PESQUISA ATUALIZADA COM LOGS ---
+// --- Função de pesquisa (MODIFICADA) ---
 exports.searchProductsByName = async (req, res) => {
     const { q, condoId } = req.query;
-
-    // Log para ver o que o backend está a receber do frontend
-    console.log(`--- Nova Pesquisa Recebida ---`);
-    console.log(`Termo de pesquisa (q): ${q}`);
-    console.log(`ID do Condomínio (condoId): ${condoId}`);
     
     if (!q || !condoId) {
         return res.status(400).json({ message: 'Termo de pesquisa e ID do condomínio são obrigatórios.' });
@@ -55,7 +62,21 @@ exports.searchProductsByName = async (req, res) => {
                 p.id,
                 p.name,
                 p.image_url,
-                p.sale_price
+                CASE
+                    WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
+                    THEN p.promotional_price
+                    ELSE p.sale_price
+                END AS sale_price,
+                CASE
+                    WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
+                    THEN p.sale_price
+                    ELSE NULL
+                END AS original_price,
+                CASE
+                    WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
+                    THEN p.promotion_end_date
+                    ELSE NULL
+                END AS promotion_end_date
             FROM products AS p
             JOIN inventory AS i ON p.id = i.product_id
             WHERE 
@@ -66,17 +87,10 @@ exports.searchProductsByName = async (req, res) => {
         `;
 
         const { rows } = await pool.query(query, [condoId, searchTerm]);
-        
-        // Log para ver o resultado da consulta
-        console.log(`Query executada com sucesso. Encontrados ${rows.length} resultados.`);
-        console.log(`---------------------------------`);
-
         res.status(200).json(rows);
 
     } catch (error) {
-        console.error('!!!!!!!! ERRO NA PESQUISA DE PRODUTOS !!!!!!!!');
-        console.error(error);
-        console.error('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!');
+        console.error('ERRO NA PESQUISA DE PRODUTOS:', error);
         res.status(500).json({ message: 'Erro interno ao pesquisar produtos.' });
     }
 };

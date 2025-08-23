@@ -1,7 +1,10 @@
+// sobw3/backendsmart/backendsmart-a691fbac7367ed29d2e67cae6bd0bd5ddac8ecef/authController.js
+
 const pool = require('../db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+// Funções de validação (permanecem as mesmas)
 const validateCPF = (cpf) => {
     cpf = cpf.replace(/[^\d]+/g,'');
     if(cpf === '') return false;
@@ -18,15 +21,37 @@ const validateCPF = (cpf) => {
     if (rev !== parseInt(cpf.charAt(10))) return false;
     return true;
 };
+const validateEmail = (email) => {
+    const re = /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/;
+    return re.test(String(email).toLowerCase());
+};
+const validatePhoneNumber = (phone) => {
+    const re = /^(?:(?:\+|00)?(55)\s?)?(?:\(?([1-9][0-9])\)?\s?)?(?:((?:9\d|[2-9])\d{3})-?(\d{4}))$/;
+    return re.test(phone);
+};
+
 
 exports.register = async (req, res) => {
-    const { name, cpf, email, password, birth_date, condo_id } = req.body;
-    if (!name || !cpf || !email || !password || !birth_date || !condo_id) {
+    const { name, cpf, email, password, birth_date, condo_id, apartment, phone_number } = req.body;
+    
+    // Validações (permanecem as mesmas)
+    if (!name || !cpf || !email || !password || !birth_date || !condo_id || !apartment || !phone_number) {
         return res.status(400).json({ message: 'Todos os campos são obrigatórios.' });
     }
     if (!validateCPF(cpf)) {
         return res.status(400).json({ message: 'CPF inválido.' });
     }
+    if (!validateEmail(email)) {
+        return res.status(400).json({ message: 'Formato de e-mail inválido.' });
+    }
+    if (!validatePhoneNumber(phone_number)) {
+        return res.status(400).json({ message: 'Formato de número de telefone inválido.' });
+    }
+    if (!/bloco\s\w+\s-\sapto\s\d+/i.test(apartment)) {
+        return res.status(400).json({ message: 'Formato do apartamento inválido. Use o padrão: Bloco X - Apto YYY' });
+    }
+
+
     try {
         const userExists = await pool.query("SELECT * FROM users WHERE cpf = $1 OR email = $2", [cpf, email]);
         if (userExists.rows.length > 0) {
@@ -34,16 +59,19 @@ exports.register = async (req, res) => {
         }
         const salt = await bcrypt.genSalt(10);
         const password_hash = await bcrypt.hash(password, salt);
+        
         const newUser = await pool.query(
-            "INSERT INTO users (name, cpf, email, password_hash, birth_date, condo_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, name, email",
-            [name, cpf, email, password_hash, birth_date, condo_id]
+            "INSERT INTO users (name, cpf, email, password_hash, birth_date, condo_id, apartment, phone_number) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email",
+            [name, cpf, email, password_hash, birth_date, condo_id, apartment, phone_number]
         );
+        
         res.status(201).json({ message: 'Usuário cadastrado com sucesso!', user: newUser.rows[0] });
     } catch (error) {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 };
 
+// ALTERADO: Adicionada verificação `is_active` e mais dados no payload
 exports.login = async (req, res) => {
     const { cpf, password } = req.body;
     if (!cpf || !password) {
@@ -55,42 +83,57 @@ exports.login = async (req, res) => {
             return res.status(404).json({ message: 'Usuário não encontrado.' });
         }
         const user = userResult.rows[0];
+
+        // NOVA VERIFICAÇÃO
+        if (!user.is_active) {
+            return res.status(403).json({ message: 'Esta conta está bloqueada. Por favor, entre em contato com o suporte.' });
+        }
+
         const isMatch = await bcrypt.compare(password, user.password_hash);
         if (!isMatch) {
             return res.status(401).json({ message: 'CPF ou senha inválidos.' });
         }
+        
+        // PAYLOAD ATUALIZADO
         const payload = {
-            user: {
-                id: user.id,
-                name: user.name,
-                condoId: user.condo_id,
-                email: user.email,
-                cpf: user.cpf
-            }
+            id: user.id,
+            name: user.name,
+            condoId: user.condo_id,
+            email: user.email,
+            cpf: user.cpf,
+            credit_limit: user.credit_limit,
+            credit_used: user.credit_used,
+            credit_due_day: user.credit_due_day
         };
-        jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
+
+        jwt.sign({ user: payload }, process.env.JWT_SECRET, { expiresIn: '7d' }, (err, token) => {
             if (err) throw err;
-            res.json({ message: 'Login bem-sucedido!', token, user: payload.user });
+            res.json({ message: 'Login bem-sucedido!', token, user: payload });
         });
     } catch (error) {
         res.status(500).json({ message: 'Erro interno do servidor.' });
     }
 };
 
+// ALTERADO: Adicionados campos de crédito
 exports.getMe = async (req, res) => {
     try {
-        const userResult = await pool.query('SELECT id, name, email, condo_id, cpf FROM users WHERE id = $1', [req.user.id]);
+        const userResult = await pool.query(
+            'SELECT id, name, email, condo_id, cpf, phone_number, apartment, wallet_balance, credit_limit, credit_used, credit_due_day FROM users WHERE id = $1', 
+            [req.user.id]
+        );
+
         if (userResult.rows.length === 0) {
             return res.status(404).json({ message: 'Utilizador do token não encontrado.' });
         }
-        const user = userResult.rows[0];
-        const userPayload = { id: user.id, name: user.name, email: user.email, condoId: user.condo_id, cpf: user.cpf };
-        res.status(200).json(userPayload);
+        
+        res.status(200).json(userResult.rows[0]);
     } catch (error) {
         res.status(500).json({ message: 'Erro ao buscar dados do utilizador.' });
     }
 };
 
+// As outras funções (updateUserCondo, updateMe, verifyUserForReset, resetPassword) permanecem as mesmas
 exports.updateUserCondo = async (req, res) => {
     const userId = req.user.id;
     const { condoId } = req.body;

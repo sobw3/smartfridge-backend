@@ -1,47 +1,55 @@
+// ARQUIVO: index.js (VERSÃO FINAL E CORRIGIDA)
+
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
-// Importa os ficheiros de rotas
+// Importar TODAS as suas rotas com os nomes corretos dos arquivos
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
-const adminRoutes = require('./routes/adminRoutes');
-const publicRoutes = require('./routes/publicRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const publicRoutes = require('./routes/publicRoutes');
 const fridgeRoutes = require('./routes/fridgeRoutes');
+const walletRoutes = require('./routes/walletRoutes');
+const cashierRoutes = require('./routes/cashierRoutes');
+const userRoutes = require('./routes/userRoutes'); // <-- ADICIONE ESTA LINHA
+const promotionScheduler = require('./services/promotionScheduler');
+const creditRoutes = require('./routes/creditRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// --- CORREÇÃO DEFINITIVA DO CORS ---
-// Esta configuração permite que o seu site no Render (quando a variável de ambiente estiver definida)
-// OU o seu ambiente local (http://localhost:3000) façam pedidos.
-const corsOptions = {
-    origin: process.env.CORS_ORIGIN || 'http://localhost:3000',
-    optionsSuccessStatus: 200
-};
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); 
-
-// Middleware para interpretar o corpo das requisições como JSON
+// Middlewares
+app.use(cors());
 app.use(express.json());
 
-// --- Rotas da API ---
+// Rotas da API
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/webhook', webhookRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/public', publicRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/webhooks', webhookRoutes);
 app.use('/api/fridge', fridgeRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/admin/central-cashier', cashierRoutes);
+app.use('/api/user', userRoutes); // <-- ADICIONE ESTA LINHA
+app.use('/api/credit', creditRoutes);
 
-// Rota de teste para verificar se o servidor está no ar
+
+// Rota de teste
 app.get('/', (req, res) => {
     res.send('API da SmartFridge Brasil está funcionando!');
 });
 
-// Inicia o servidor
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
+     // promotionScheduler.start();
+});
+
+app.use((req, res, next) => {
+    console.log(`Pedido recebido: ${req.method} ${req.originalUrl}`);
+    next();
 });
