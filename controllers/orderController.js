@@ -158,29 +158,32 @@ exports.createPixOrder = async (req, res) => {
 };
 
 exports.createCardOrder = async (req, res) => {
-    const { items, user, token, issuer_id, payment_method_id, installments } = req.body;
-    if (!items || !token || !payment_method_id || !user || !user.cpf) {
-        return res.status(400).json({ message: 'Dados de pagamento ou do utilizador (incluindo CPF) são incompletos.' });
+    // ALTERAÇÃO: Adicionado 'condoId' e 'fridgeId' à lista de parâmetros recebidos
+    const { items, user, token, issuer_id, payment_method_id, installments, condoId, fridgeId } = req.body;
+    if (!items || !token || !payment_method_id || !user || !user.cpf || !condoId || !fridgeId) {
+        return res.status(400).json({ message: 'Dados de pagamento, do utilizador ou da sessão de compra estão incompletos.' });
     }
     
     const clientDB = await pool.connect();
     try {
         await clientDB.query('BEGIN');
         
-        const fridgeId = await validateAndGetFridgeId(clientDB, user.id);
         let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
+        
+        // CORREÇÃO: Usa o 'condoId' da compra para criar o pedido
         const newOrder = await clientDB.query(
             'INSERT INTO orders (user_id, condo_id, total_amount, status, payment_method, fridge_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-            [user.id, user.condoId, totalAmount, 'pending', 'card', fridgeId]
+            [user.id, condoId, totalAmount, 'pending', 'card', fridgeId]
         );
         const orderId = newOrder.rows[0].id;
+
         for (const item of items) {
             await clientDB.query('INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)', [orderId, item.id, item.quantity, item.sale_price]);
         }
 
         const description = await createPaymentDescription(items, user);
 
-       const paymentData = {
+        const paymentData = {
             body: {
                 transaction_amount: totalAmount,
                 description: description,
@@ -190,10 +193,7 @@ exports.createCardOrder = async (req, res) => {
                 issuer_id: issuer_id,
                 payer: {
                     email: user.email,
-                    identification: {
-                        type: 'CPF',
-                        number: user.cpf.replace(/\D/g, '')
-                    }
+                    identification: { type: 'CPF', number: user.cpf.replace(/\D/g, '') }
                 },
                 external_reference: orderId.toString(),
             }
@@ -203,7 +203,8 @@ exports.createCardOrder = async (req, res) => {
         if (paymentResult.status === 'approved') {
             await clientDB.query('UPDATE orders SET status = $1, payment_gateway_id = $2 WHERE id = $3', ['paid', paymentResult.id.toString(), orderId]);
             for (const item of items) {
-                await clientDB.query('UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3', [item.quantity, item.id, user.condoId]);
+                // CORREÇÃO: Usa o 'condoId' correto para dar baixa no stock
+                await clientDB.query('UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3', [item.quantity, item.id, condoId]);
             }
             const unlockToken = crypto.randomBytes(16).toString('hex');
             const expires_at = new Date(Date.now() + 5 * 60 * 1000);
