@@ -180,7 +180,7 @@ exports.createCardOrder = async (req, res) => {
 
         const description = await createPaymentDescription(items, user);
 
-        const paymentData = {
+       const paymentData = {
             body: {
                 transaction_amount: totalAmount,
                 description: description,
