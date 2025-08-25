@@ -66,7 +66,7 @@ exports.createProduct = async (req, res) => {
         // LÓGICA DE CÁLCULO AUTOMÁTICO
         let calculatedPromoPrice = null;
         if (purchase_price && promotion_start_date && promotion_end_date) {
-            calculatedPromoPrice = parseFloat(purchase_price) * 1.30;
+            calculatedPromoPrice = parseFloat(purchase_price) * 1.10;
         }
 
         const newProduct = await pool.query(
