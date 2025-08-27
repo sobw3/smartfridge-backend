@@ -10,18 +10,26 @@ const payment = new Payment(client);
 const calculateInvoiceTotal = (user) => {
     const creditUsed = parseFloat(user.credit_used || 0);
     if (creditUsed <= 0) {
-        return { total: 0 };
+        return { total: 0, dueDate: null };
     }
 
     const today = new Date();
-    // Cria a data de vencimento para o mês atual
-    const dueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
+    today.setHours(0, 0, 0, 0); // Zera a hora para comparações de dia inteiro
+
+    // Cria a data de vencimento para o mês ATUAL
+    let dueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
+
+    // SE a data de hoje JÁ PASSOU da data de vencimento deste mês,
+    // a fatura vencerá apenas no PRÓXIMO mês.
+    if (today > dueDate) {
+        dueDate.setMonth(dueDate.getMonth() + 1);
+    }
 
     let total = creditUsed;
     const serviceFee = total * 0.10; // Taxa de serviço de 10%
     let interest = 0; // Juros por atraso
 
-    // Verifica se a fatura está atrasada
+    // Apenas calcula juros se a data de hoje for DEPOIS da data de vencimento CORRETA
     if (today > dueDate) {
         const diffTime = Math.abs(today - dueDate);
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -32,7 +40,8 @@ const calculateInvoiceTotal = (user) => {
         base: creditUsed,
         serviceFee,
         interest,
-        total: total + serviceFee + interest
+        total: total + serviceFee + interest,
+        dueDate: dueDate // Retorna a data de vencimento correta
     };
 };
 
