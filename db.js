@@ -1,13 +1,13 @@
-<<<<<<< HEAD
+
 // ARQUIVO: db.js (VERSÃO FINAL HÍBRIDA - LOCAL E PRODUÇÃO)
-=======
+
 // ARQUIVO: db.js (VERSÃO FINAL E CORRIGIDA PARA PRODUÇÃO)
->>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
+
 
 const { Pool } = require('pg');
 require('dotenv').config();
 
-<<<<<<< HEAD
+
 let config;
 
 // Verifica se a DATABASE_URL está disponível (para ambientes de produção como o Render)
@@ -37,7 +37,7 @@ const pool = new Pool(config);
 pool.connect()
     .then(() => console.log('Conexão com a base de dados estabelecida com sucesso.'))
     .catch(err => console.error('ERRO AO CONECTAR À BASE DE DADOS:', err));
-=======
+
 // Objeto de configuração base que usa a connection string.
 // Isto é o que o Render fornece.
 const config = {
@@ -63,6 +63,6 @@ pool.connect()
     .catch(err => {
         console.error('ERRO AO CONECTAR À BASE DE DADOS:', err);
     });
->>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
+
 
 module.exports = pool;
