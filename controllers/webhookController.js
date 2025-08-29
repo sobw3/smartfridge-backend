@@ -27,8 +27,12 @@ exports.handleMercadoPagoWebhook = async (req, res) => {
 
                 if (externalRef.startsWith('credit_invoice_')) {
                     console.log(`Pagamento identificado como PAGAMENTO DE FATURA para a referência: ${externalRef}`);
+<<<<<<< HEAD
                     // Passa o paymentId para a função
                     await processInvoicePayment(externalRef, paymentId);
+=======
+                    await processInvoicePayment(externalRef);
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
 
                 // --- INÍCIO DA CORREÇÃO ---
                 } else if (externalRef.startsWith('wallet_deposit_')) {
@@ -59,14 +63,27 @@ exports.handleMercadoPagoWebhook = async (req, res) => {
     res.sendStatus(200);
 };
 
-// Função para processar um DEPÓSITO na carteira
+// Função para processar um DEPÓSITO na carteira (MELHORADA)
 async function processWalletDeposit(depositInfo) {
     const { userId, amount, paymentId } = depositInfo;
+<<<<<<< HEAD
+=======
+    // Validação para garantir que os dados são válidos
+    if (!userId || !amount || amount <= 0) {
+        console.error(`Tentativa de depósito inválida. UserID: ${userId}, Amount: ${amount}`);
+        return;
+    }
+    
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
 
+<<<<<<< HEAD
         // Adiciona o saldo na conta do usuário
+=======
+        // 1. Adiciona o saldo na conta do utilizador
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         const updatedUser = await dbClient.query(
             'UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2 RETURNING wallet_balance',
             [amount, userId]
@@ -76,16 +93,24 @@ async function processWalletDeposit(depositInfo) {
         // Registra a transação no histórico da carteira
         await dbClient.query(
             `INSERT INTO wallet_transactions (user_id, type, amount, description, payment_gateway_id) VALUES ($1, 'deposit', $2, $3, $4)`,
+<<<<<<< HEAD
             [userId, amount, 'Depósito via PIX', paymentId]
+=======
+            // Adicionado o 'paymentId' para melhor rastreamento
+            [userId, amount, `Depósito via PIX`, paymentId]
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         );
         console.log(`Transação de depósito de ${amount} registrada para o usuário ${userId}`);
         
         await dbClient.query('COMMIT');
+<<<<<<< HEAD
         
         // --- ADICIONADO: Envia tiquete de notificação ---
         const depositMessage = `Confirmamos o seu depósito de R$ ${parseFloat(amount).toFixed(2)}. O valor já está disponível na sua carteira.`;
         await createSystemTicket(userId, depositMessage);
 
+=======
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         console.log(`Transação de depósito para o usuário ${userId} completada com sucesso.`);
     } catch (error) {
         await dbClient.query('ROLLBACK');
@@ -108,6 +133,10 @@ async function processProductPurchase(orderId, paymentGatewayId) {
         const { rows: orderItems } = await dbClient.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
         const { rows: [order] } = await dbClient.query('SELECT condo_id, fridge_id FROM orders WHERE id = $1', [orderId]);
         
+<<<<<<< HEAD
+=======
+        console.log(`Encontrados ${orderItems.length} itens para o pedido ${orderId}. Atualizando o inventário...`);
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         for (const item of orderItems) {
             await dbClient.query(
                 'UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3',
@@ -117,7 +146,11 @@ async function processProductPurchase(orderId, paymentGatewayId) {
         console.log(`Inventário para o pedido ${orderId} atualizado.`);
 
         const unlockToken = crypto.randomBytes(16).toString('hex');
+<<<<<<< HEAD
         const expires_at = new Date(Date.now() + 5 * 60 * 1000);
+=======
+        const expires_at = new Date(Date.now() + 5 * 60 * 1000); 
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         await dbClient.query(
             'INSERT INTO unlock_tokens (token, order_id, expires_at, fridge_id) VALUES ($1, $2, $3, $4)',
             [unlockToken, orderId, expires_at, order.fridge_id]
@@ -136,13 +169,18 @@ async function processProductPurchase(orderId, paymentGatewayId) {
 }
 
 // Função para processar o PAGAMENTO DE UMA FATURA
+<<<<<<< HEAD
 async function processInvoicePayment(externalReference, paymentId) {
+=======
+async function processInvoicePayment(externalReference) {
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
     const userId = externalReference.split('_')[2]; 
 
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
 
+<<<<<<< HEAD
         await dbClient.query('UPDATE users SET credit_used = 0 WHERE id = $1', [userId]);
 
         await dbClient.query(
@@ -150,6 +188,11 @@ async function processInvoicePayment(externalReference, paymentId) {
              SET status = 'paid', paid_at = NOW(), related_payment_ref = $1
              WHERE user_id = $2 AND status IN ('open', 'late')`,
             [paymentId, userId]
+=======
+        await dbClient.query(
+            'UPDATE users SET credit_used = 0 WHERE id = $1',
+            [userId]
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         );
 
         console.log(`Fatura(s) e saldo devedor pagos para o utilizador ${userId}.`);

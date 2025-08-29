@@ -64,9 +64,14 @@ exports.createProduct = async (req, res) => {
     const { name, description, image_url, purchase_price, sale_price, critical_stock_level, promotion_start_date, promotion_end_date, category } = req.body;
     try {
         let calculatedPromoPrice = null;
+<<<<<<< HEAD
         const cost = parseFloat(purchase_price);
         if (!isNaN(cost) && cost > 0 && promotion_start_date && promotion_end_date) {
             calculatedPromoPrice = cost * 1.10;
+=======
+        if (purchase_price && promotion_start_date && promotion_end_date) {
+            calculatedPromoPrice = parseFloat(purchase_price) * 1.10;
+>>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
         }
 
         const newProduct = await pool.query(
