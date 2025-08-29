@@ -9,6 +9,7 @@ const creditController = require('../controllers/creditController');
 // Login
 router.post('/login', adminController.loginAdmin);
 router.get('/dashboard-stats', protectAdmin, adminController.getDashboardStats);
+router.post('/fridges/:fridgeId/unlock', protectAdmin, adminController.remoteUnlockFridge);
 
 // Condomínios
 router.post('/condominiums', protectAdmin, adminController.createCondominium);
