@@ -1,184 +1,156 @@
-// controllers/creditController.js
+// ARQUIVO: controllers/webhookController.js (VERSÃO CORRIGIDA E FINAL)
 
 const pool = require('../db');
 const { MercadoPagoConfig, Payment } = require('mercadopago');
+const crypto = require('crypto');
+const { createSystemTicket } = require('./ticketController');
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
-const payment = new Payment(client);
 
-// --- LÓGICA DE CÁLCULO CENTRALIZADA E CORRIGIDA ---
-async function getCreditData(userId) {
-    // 1. Busca dados do utilizador
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-    if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
-    const user = userResult.rows[0];
+exports.handleMercadoPagoWebhook = async (req, res) => {
+    console.log('--- WEBHOOK DO MERCADO PAGO RECEBIDO ---');
+    console.log('Query:', req.query);
+    console.log('Body:', JSON.stringify(req.body, null, 2));
 
-    // 2. Busca faturas pendentes
-    const invoicesResult = await pool.query(
-        "SELECT id, amount, due_date FROM credit_invoices WHERE user_id = $1 AND status IN ('open', 'late')",
-        [userId]
-    );
-    const pendingInvoices = invoicesResult.rows;
+    const paymentType = req.body.type || req.query.type;
+    const paymentId = req.body.data?.id || req.query['data.id'];
 
-    // 3. Calcula a dívida
-    const currentSpending = parseFloat(user.credit_used);
-    const pendingInvoicesAmount = pendingInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount), 0);
-    const totalDebt = currentSpending + pendingInvoicesAmount;
-    
-    // 4. Calcula a taxa de serviço sobre a dívida total
-    const serviceFee = totalDebt * 0.10;
+    if (paymentType === 'payment' && paymentId) {
+        console.log(`Notificação de pagamento recebida para o ID: ${paymentId}`);
+        try {
+            const paymentInfo = await new Payment(client).get({ id: paymentId });
+            console.log(`Status do pagamento no MP: ${paymentInfo.status}. Referência externa: ${paymentInfo.external_reference}`);
 
-    // 5. Calcula juros apenas sobre faturas que já venceram
-    let totalInterest = 0;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    pendingInvoices.forEach(inv => {
-        const dueDate = new Date(inv.due_date);
-        if (today > dueDate) {
-            const diffTime = Math.abs(today - dueDate);
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            totalInterest += parseFloat(inv.amount) * 0.025 * diffDays;
-        }
-    });
-    
-    // 6. Calcula o total final a pagar
-    const totalToPay = totalDebt + serviceFee + totalInterest;
+            if (paymentInfo.status === 'approved') {
+                const externalRef = paymentInfo.external_reference;
 
-    // 7. Calcula a data de vencimento da próxima fatura
-    let nextDueDate = null;
-    if (user.credit_due_day) {
-        nextDueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
-        if (today.getDate() >= user.credit_due_day) {
-            nextDueDate.setMonth(nextDueDate.getMonth() + 1);
-        }
-    }
-
-    return {
-        user,
-        currentSpending,
-        pendingInvoicesAmount,
-        totalDebt,
-        serviceFee,
-        totalInterest,
-        totalToPay,
-        nextDueDate
-    };
-}
-
-
-// --- ROTAS DO CONTROLADOR ---
-
-exports.getCreditSummary = async (req, res) => {
-    try {
-        const creditData = await getCreditData(req.user.id);
-        res.status(200).json({
-            creditLimit: parseFloat(creditData.user.credit_limit),
-            creditUsed: creditData.totalDebt,
-            availableCredit: parseFloat(creditData.user.credit_limit) - creditData.totalDebt,
-            currentSpending: creditData.currentSpending,
-            pendingInvoicesAmount: creditData.pendingInvoicesAmount,
-            serviceFee: creditData.serviceFee,
-            interest: creditData.totalInterest,
-            totalToPay: creditData.totalToPay,
-            dueDate: creditData.nextDueDate
-        });
-    } catch (error) {
-        console.error('Erro ao buscar resumo de crédito:', error);
-        res.status(500).json({ message: 'Erro interno ao buscar resumo de crédito.' });
-    }
-};
-
-exports.createInvoicePixPayment = async (req, res) => {
-    const userId = req.user.id;
-    try {
-        const creditData = await getCreditData(userId);
-
-        if (creditData.totalToPay <= 0) {
-            return res.status(400).json({ message: 'Não há fatura ou saldo devedor para pagar.' });
-        }
-        
-        const externalReference = `credit_invoice_${userId}_${Date.now()}`;
-        const description = `Pagamento Fatura SmartFridge (Total: R$${creditData.totalToPay.toFixed(2)})`;
-
-        const paymentData = {
-            body: {
-                transaction_amount: parseFloat(creditData.totalToPay.toFixed(2)),
-                description: description,
-                payment_method_id: 'pix',
-                payer: {
-                    email: creditData.user.email,
-                    first_name: creditData.user.name.split(' ')[0],
-                    identification: { type: 'CPF', number: creditData.user.cpf.replace(/\D/g, '') }
-                },
-                external_reference: externalReference,
+                if (externalRef.startsWith('credit_invoice_')) {
+                    console.log(`Pagamento identificado como PAGAMENTO DE FATURA para a referência: ${externalRef}`);
+                    await processInvoicePayment(externalRef, paymentId);
+                } else if (externalRef.startsWith('wallet_deposit_')) {
+                    console.log(`Pagamento identificado como DEPÓSITO DE CARTEIRA para a referência: ${externalRef}`);
+                    const userId = externalRef.split('_')[2]; 
+                    const amount = paymentInfo.transaction_amount; 
+                    await processWalletDeposit({ userId, amount, paymentId });
+                } else {
+                    console.log(`Pagamento identificado como COMPRA DE PRODUTO para o pedido ${externalRef}`);
+                    await processProductPurchase(externalRef, paymentId);
+                }
+            } else {
+                console.log(`Status do pagamento não é 'approved' (${paymentInfo.status}). Nenhuma ação no banco de dados.`);
             }
-        };
-
-        const result = await payment.create(paymentData);
-        
-        res.status(201).json({
-            paymentId: result.id,
-            pix_qr_code: result.point_of_interaction.transaction_data.qr_code_base64,
-            pix_qr_code_text: result.point_of_interaction.transaction_data.qr_code
-        });
-
-    } catch (error) {
-        console.error('Erro ao gerar PIX para fatura:', error);
-        res.status(500).json({ message: 'Falha ao gerar PIX para pagamento da fatura.' });
+        } catch (error) {
+            console.error('ERRO NO PROCESSAMENTO DO WEBHOOK:', error);
+        }
+    } else {
+        console.log(`Tipo de evento recebido não é 'payment' ou ID do pagamento não encontrado. Ignorando.`);
     }
+
+    res.sendStatus(200);
 };
 
-exports.closeAndCreateInvoice = async (req, res) => {
-    const { userId } = req.params;
+async function processWalletDeposit(depositInfo) {
+    const { userId, amount, paymentId } = depositInfo;
+    if (!userId || !amount || amount <= 0) {
+        console.error(`Tentativa de depósito inválida. UserID: ${userId}, Amount: ${amount}`);
+        return;
+    }
+    
     const dbClient = await pool.connect();
-
     try {
         await dbClient.query('BEGIN');
-
-        const userResult = await dbClient.query('SELECT * FROM users WHERE id = $1 FOR UPDATE', [userId]);
-        if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
-        
-        const user = userResult.rows[0];
-        const creditUsed = parseFloat(user.credit_used);
-
-        if (creditUsed <= 0) throw new Error('Não há saldo devedor para criar uma fatura.');
-
-        const today = new Date();
-        let dueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
-        if (today.getDate() >= user.credit_due_day) {
-            dueDate.setMonth(dueDate.getMonth() + 1);
-        }
-
-        await dbClient.query(
-            `INSERT INTO credit_invoices (user_id, amount, due_date, status) VALUES ($1, $2, $3, 'open')`,
-            [userId, creditUsed, dueDate]
+        const updatedUser = await dbClient.query(
+            'UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2 RETURNING wallet_balance',
+            [amount, userId]
         );
-
-        // Zera o crédito usado para o próximo ciclo
-        await dbClient.query('UPDATE users SET credit_used = 0 WHERE id = $1', [userId]);
-
+        console.log(`Saldo do usuário ${userId} atualizado para ${updatedUser.rows[0].wallet_balance}`);
+        
+        await dbClient.query(
+            `INSERT INTO wallet_transactions (user_id, type, amount, description, payment_gateway_id) VALUES ($1, 'deposit', $2, $3, $4)`,
+            [userId, amount, 'Depósito via PIX', paymentId]
+        );
+        console.log(`Transação de depósito de ${amount} registrada para o usuário ${userId}`);
+        
         await dbClient.query('COMMIT');
-        res.status(201).json({ message: 'Fatura fechada e criada com sucesso!' });
+        
+        const depositMessage = `Confirmamos o seu depósito de R$ ${parseFloat(amount).toFixed(2)}. O valor já está disponível na sua carteira.`;
+        await createSystemTicket(userId, depositMessage);
 
+        console.log(`Transação de depósito para o usuário ${userId} completada com sucesso.`);
     } catch (error) {
         await dbClient.query('ROLLBACK');
-        console.error(`Erro ao fechar fatura para o utilizador ${userId}:`, error);
-        res.status(400).json({ message: error.message });
+        console.error(`ERRO ao processar depósito para o usuário ${userId}:`, error);
+        throw error;
     } finally {
         dbClient.release();
     }
-};
+}
 
-exports.getInvoicesForUser = async (req, res) => {
-    const { userId } = req.params;
+async function processProductPurchase(orderId, paymentGatewayId) {
+    const dbClient = await pool.connect();
     try {
-        const { rows } = await pool.query(
-            "SELECT id, amount, due_date, status, paid_at FROM credit_invoices WHERE user_id = $1 ORDER BY due_date DESC",
-            [userId]
+        await dbClient.query('BEGIN');
+        
+        await dbClient.query('UPDATE orders SET status = $1, payment_gateway_id = $2 WHERE id = $3', ['paid', paymentGatewayId, orderId]);
+        console.log(`Status do pedido ${orderId} atualizado para 'paid'.`);
+
+        const { rows: orderItems } = await dbClient.query('SELECT * FROM order_items WHERE order_id = $1', [orderId]);
+        const { rows: [order] } = await dbClient.query('SELECT condo_id, fridge_id FROM orders WHERE id = $1', [orderId]);
+        
+        for (const item of orderItems) {
+            await dbClient.query(
+                'UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3',
+                [item.quantity, item.product_id, order.condo_id]
+            );
+        }
+        console.log(`Inventário para o pedido ${orderId} atualizado.`);
+
+        const unlockToken = crypto.randomBytes(16).toString('hex');
+        const expires_at = new Date(Date.now() + 5 * 60 * 1000);
+        await dbClient.query(
+            'INSERT INTO unlock_tokens (token, order_id, expires_at, fridge_id) VALUES ($1, $2, $3, $4)',
+            [unlockToken, orderId, expires_at, order.fridge_id]
         );
-        res.status(200).json(rows);
+        console.log(`Token de desbloqueio gerado para o pedido ${orderId}.`);
+
+        await dbClient.query('COMMIT');
+        console.log(`Transação de compra para o pedido ${orderId} completada com sucesso.`);
     } catch (error) {
-        console.error(`Erro ao buscar faturas para o utilizador ${userId}:`, error);
-        res.status(500).json({ message: 'Erro ao buscar histórico de faturas.' });
+        await dbClient.query('ROLLBACK');
+        console.error(`ERRO ao processar compra para o pedido ${orderId}:`, error);
+        throw error;
+    } finally {
+        dbClient.release();
     }
-};
+}
+
+async function processInvoicePayment(externalReference, paymentId) {
+    const userId = externalReference.split('_')[2]; 
+
+    const dbClient = await pool.connect();
+    try {
+        await dbClient.query('BEGIN');
+
+        await dbClient.query('UPDATE users SET credit_used = 0 WHERE id = $1', [userId]);
+
+        await dbClient.query(
+            `UPDATE credit_invoices 
+             SET status = 'paid', paid_at = NOW(), related_payment_ref = $1
+             WHERE user_id = $2 AND status IN ('open', 'late')`,
+            [paymentId, userId]
+        );
+        console.log(`Fatura(s) e saldo devedor pagos para o utilizador ${userId}.`);
+        
+        await dbClient.query('COMMIT');
+
+        const invoiceMessage = `Obrigado! Confirmamos o pagamento da sua fatura SmartFridge.`;
+        await createSystemTicket(userId, invoiceMessage);
+        
+    } catch (error) {
+        await dbClient.query('ROLLBACK');
+        console.error(`ERRO ao processar pagamento de fatura para o utilizador ${userId}:`, error);
+        throw error;
+    } finally {
+        dbClient.release();
+    }
+}
