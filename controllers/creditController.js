@@ -6,21 +6,12 @@ const { MercadoPagoConfig, Payment } = require('mercadopago');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
-<<<<<<< HEAD
-// --- LÓGICA DE CÁLCULO CENTRALIZADA ---
-async function getCreditData(userId) {
-    // 1. Busca dados do utilizador
-    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-    if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
-    const user = userResult.rows[0];
-=======
 // Função para calcular o total da fatura (com taxas e juros)
 const calculateInvoiceTotal = (user) => {
     const creditUsed = parseFloat(user.credit_used || 0);
     if (creditUsed <= 0) {
         return { total: 0, dueDate: null };
     }
->>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
 
     // 2. Busca faturas pendentes
     const invoicesResult = await pool.query(
@@ -38,7 +29,6 @@ const calculateInvoiceTotal = (user) => {
     // 4. Calcula juros apenas sobre faturas atrasadas
     let totalInterest = 0;
     const today = new Date();
-<<<<<<< HEAD
     today.setHours(0, 0, 0, 0);
     pendingInvoices.forEach(inv => {
         const dueDate = new Date(inv.due_date);
@@ -48,7 +38,6 @@ const calculateInvoiceTotal = (user) => {
             totalInterest += parseFloat(inv.amount) * 0.025 * diffDays;
         }
     });
-=======
     today.setHours(0, 0, 0, 0); // Zera a hora para comparações de dia inteiro
 
     // Cria a data de vencimento para o mês ATUAL
@@ -59,11 +48,10 @@ const calculateInvoiceTotal = (user) => {
     if (today > dueDate) {
         dueDate.setMonth(dueDate.getMonth() + 1);
     }
->>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
 
     const totalToPay = totalDebt + serviceFee + totalInterest;
 
-<<<<<<< HEAD
+
     // 5. Calcula a próxima data de vencimento
     let nextDueDate = null;
     if (user.credit_due_day) {
@@ -71,13 +59,13 @@ const calculateInvoiceTotal = (user) => {
         if (today.getDate() >= user.credit_due_day) {
             nextDueDate.setMonth(nextDueDate.getMonth() + 1);
         }
-=======
+
     // Apenas calcula juros se a data de hoje for DEPOIS da data de vencimento CORRETA
     if (today > dueDate) {
         const diffTime = Math.abs(today - dueDate);
         const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
         interest = total * 0.025 * diffDays; // Juros de 2.5% ao dia
->>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
+
     }
 
     return {
@@ -87,15 +75,12 @@ const calculateInvoiceTotal = (user) => {
         pendingInvoicesAmount,
         totalDebt,
         serviceFee,
-<<<<<<< HEAD
         totalInterest,
         totalToPay,
         nextDueDate
-=======
         interest,
         total: total + serviceFee + interest,
         dueDate: dueDate // Retorna a data de vencimento correta
->>>>>>> a219e2637ef6f83ea23004e4dcb2becbd565265b
     };
 }
 
