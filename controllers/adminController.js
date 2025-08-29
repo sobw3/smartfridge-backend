@@ -535,3 +535,21 @@ exports.getDashboardStats = async (req, res) => {
         res.status(500).json({ message: 'Erro ao buscar estatísticas do dashboard.' });
     }
 };
+
+exports.remoteUnlockFridge = async (req, res) => {
+    const { fridgeId } = req.params;
+    if (!fridgeId) {
+        return res.status(400).json({ message: 'O ID da geladeira é obrigatório.' });
+    }
+    try {
+        await pool.query(
+            'INSERT INTO unlock_commands (fridge_id) VALUES ($1)',
+            [fridgeId]
+        );
+        console.log(`COMANDO DE DESBLOQUEIO REMOTO GERADO PARA A GELADEIRA: ${fridgeId}`);
+        res.status(200).json({ message: 'Comando de desbloqueio enviado com sucesso!' });
+    } catch (error) {
+        console.error(`Erro ao enviar comando de desbloqueio remoto para ${fridgeId}:`, error);
+        res.status(500).json({ message: 'Erro interno ao enviar comando.' });
+    }
+};

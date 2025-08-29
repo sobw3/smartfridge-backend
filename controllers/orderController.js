@@ -83,10 +83,11 @@ exports.createWalletPaymentOrder = async (req, res) => {
         const unlockToken = crypto.randomBytes(16).toString('hex');
         const expires_at = new Date(Date.now() + 5 * 60 * 1000);
         
-        await dbClient.query('INSERT INTO unlock_tokens (token, order_id, expires_at, fridge_id) VALUES ($1, $2, $3, $4)', [unlockToken, orderId, expires_at, fridgeId]);
+        await dbClient.query('INSERT INTO unlock_commands (fridge_id) VALUES ($1)', [fridgeId]);
         
         await dbClient.query('COMMIT');
-        res.status(201).json({ message: 'Compra com saldo realizada com sucesso!', orderId: orderId, unlockToken });
+        // ALTERAÇÃO: Remove o 'unlockToken' da resposta
+        res.status(201).json({ message: 'Compra com saldo realizada com sucesso!', orderId: orderId });
 
     } catch (error) {
         await dbClient.query('ROLLBACK');
@@ -209,10 +210,10 @@ exports.createCardOrder = async (req, res) => {
             const unlockToken = crypto.randomBytes(16).toString('hex');
             const expires_at = new Date(Date.now() + 5 * 60 * 1000);
             
-            await clientDB.query('INSERT INTO unlock_tokens (token, order_id, expires_at, fridge_id) VALUES ($1, $2, $3, $4)', [unlockToken, orderId, expires_at, fridgeId]);
+            await clientDB.query('INSERT INTO unlock_commands (fridge_id) VALUES ($1)', [fridgeId]);
 
             await clientDB.query('COMMIT');
-            res.status(201).json({ status: 'approved', orderId: orderId, unlockToken });
+            res.status(201).json({ status: 'approved', orderId: orderId });
         } else {
             await clientDB.query('ROLLBACK');
             res.status(400).json({ status: paymentResult.status, message: paymentResult.status_detail });
@@ -284,10 +285,10 @@ exports.createCreditPaymentOrder = async (req, res) => {
         
         const unlockToken = crypto.randomBytes(16).toString('hex');
         const expires_at = new Date(Date.now() + 5 * 60 * 1000);
-        await dbClient.query('INSERT INTO unlock_tokens (token, order_id, expires_at, fridge_id) VALUES ($1, $2, $3, $4)', [unlockToken, orderId, expires_at, fridgeId]);
+        await dbClient.query('INSERT INTO unlock_commands (fridge_id) VALUES ($1)', [fridgeId]);
         
         await dbClient.query('COMMIT');
-        res.status(201).json({ message: 'Compra com crédito realizada com sucesso!', orderId: orderId, unlockToken });
+        res.status(201).json({ message: 'Compra com crédito realizada com sucesso!', orderId: orderId });
 
     } catch (error) {
         await dbClient.query('ROLLBACK');

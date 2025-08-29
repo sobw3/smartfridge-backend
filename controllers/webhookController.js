@@ -105,13 +105,14 @@ async function processProductPurchase(orderId, paymentGatewayId) {
         }
         console.log(`Inventário para o pedido ${orderId} atualizado.`);
 
-        const unlockToken = crypto.randomBytes(16).toString('hex');
-        const expires_at = new Date(Date.now() + 5 * 60 * 1000);
+        // --- INÍCIO DA ALTERAÇÃO ---
+        // Troca a criação de 'unlock_tokens' por 'unlock_commands'
         await dbClient.query(
-            'INSERT INTO unlock_tokens (token, order_id, expires_at, fridge_id) VALUES ($1, $2, $3, $4)',
-            [unlockToken, orderId, expires_at, order.fridge_id]
+            'INSERT INTO unlock_commands (fridge_id) VALUES ($1)',
+            [order.fridge_id]
         );
-        console.log(`Token de desbloqueio gerado para o pedido ${orderId}.`);
+        console.log(`Comando de desbloqueio gerado para a geladeira ${order.fridge_id}.`);
+        // --- FIM DA ALTERAÇÃO ---
 
         await dbClient.query('COMMIT');
         console.log(`Transação de compra para o pedido ${orderId} completada com sucesso.`);
