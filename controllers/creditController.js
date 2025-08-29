@@ -1,4 +1,4 @@
-// CRIE ESTE NOVO ARQUIVO: controllers/creditController.js
+// controllers/creditController.js
 
 const pool = require('../db');
 const { MercadoPagoConfig, Payment } = require('mercadopago');
@@ -6,67 +6,106 @@ const { MercadoPagoConfig, Payment } = require('mercadopago');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
-// Função para calcular o total da fatura (com taxas e juros)
-const calculateInvoiceTotal = (user) => {
-    const creditUsed = parseFloat(user.credit_used || 0);
-    if (creditUsed <= 0) {
-        return { total: 0 };
-    }
+// --- LÓGICA DE CÁLCULO CENTRALIZADA ---
+async function getCreditData(userId) {
+    // 1. Busca dados do utilizador
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
+    const user = userResult.rows[0];
 
+    // 2. Busca faturas pendentes
+    const invoicesResult = await pool.query(
+        "SELECT id, amount, due_date FROM credit_invoices WHERE user_id = $1 AND status IN ('open', 'late')",
+        [userId]
+    );
+    const pendingInvoices = invoicesResult.rows;
+
+    // 3. Calcula a dívida e o total a pagar
+    const currentSpending = parseFloat(user.credit_used);
+    const pendingInvoicesAmount = pendingInvoices.reduce((sum, inv) => sum + parseFloat(inv.amount), 0);
+    const totalDebt = currentSpending + pendingInvoicesAmount;
+    const serviceFee = totalDebt * 0.10;
+
+    // 4. Calcula juros apenas sobre faturas atrasadas
+    let totalInterest = 0;
     const today = new Date();
-    // Cria a data de vencimento para o mês atual
-    const dueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
+    today.setHours(0, 0, 0, 0);
+    pendingInvoices.forEach(inv => {
+        const dueDate = new Date(inv.due_date);
+        if (today > dueDate) {
+            const diffTime = Math.abs(today - dueDate);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            totalInterest += parseFloat(inv.amount) * 0.025 * diffDays;
+        }
+    });
 
-    let total = creditUsed;
-    const serviceFee = total * 0.10; // Taxa de serviço de 10%
-    let interest = 0; // Juros por atraso
+    const totalToPay = totalDebt + serviceFee + totalInterest;
 
-    // Verifica se a fatura está atrasada
-    if (today > dueDate) {
-        const diffTime = Math.abs(today - dueDate);
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        interest = total * 0.025 * diffDays; // Juros de 2.5% ao dia
+    // 5. Calcula a próxima data de vencimento
+    let nextDueDate = null;
+    if (user.credit_due_day) {
+        nextDueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
+        if (today.getDate() >= user.credit_due_day) {
+            nextDueDate.setMonth(nextDueDate.getMonth() + 1);
+        }
     }
 
     return {
-        base: creditUsed,
+        user,
+        pendingInvoices,
+        currentSpending,
+        pendingInvoicesAmount,
+        totalDebt,
         serviceFee,
-        interest,
-        total: total + serviceFee + interest
+        totalInterest,
+        totalToPay,
+        nextDueDate
     };
+}
+
+// --- ROTAS DO CONTROLADOR ---
+
+exports.getCreditSummary = async (req, res) => {
+    try {
+        const creditData = await getCreditData(req.user.id);
+        res.status(200).json({
+            creditLimit: parseFloat(creditData.user.credit_limit),
+            creditUsed: creditData.totalDebt,
+            availableCredit: parseFloat(creditData.user.credit_limit) - creditData.totalDebt,
+            currentSpending: creditData.currentSpending,
+            pendingInvoicesAmount: creditData.pendingInvoicesAmount,
+            serviceFee: creditData.serviceFee,
+            interest: creditData.totalInterest,
+            totalToPay: creditData.totalToPay,
+            dueDate: creditData.nextDueDate
+        });
+    } catch (error) {
+        console.error('Erro ao buscar resumo de crédito:', error);
+        res.status(500).json({ message: 'Erro interno ao buscar resumo de crédito.' });
+    }
 };
 
-
 exports.createInvoicePixPayment = async (req, res) => {
-    console.log('-> DENTRO DO creditController.createInvoicePixPayment');
-
     const userId = req.user.id;
-
     try {
-        const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            return res.status(404).json({ message: 'Usuário não encontrado.' });
-        }
-        const user = userResult.rows[0];
+        const creditData = await getCreditData(userId);
 
-        const invoice = calculateInvoiceTotal(user);
-
-        if (invoice.total <= 0) {
-            return res.status(400).json({ message: 'Não há fatura para pagar.' });
+        if (creditData.totalToPay <= 0) {
+            return res.status(400).json({ message: 'Não há fatura ou saldo devedor para pagar.' });
         }
         
-        // A external_reference agora identifica que é um pagamento de fatura
         const externalReference = `credit_invoice_${userId}_${Date.now()}`;
+        const description = `Pagamento Fatura SmartFridge (Total: R$${creditData.totalToPay.toFixed(2)})`;
 
         const paymentData = {
             body: {
-                transaction_amount: parseFloat(invoice.total.toFixed(2)),
-                description: `Pagamento da fatura SmartFridge (Valor: R$${invoice.base.toFixed(2)})`,
+                transaction_amount: parseFloat(creditData.totalToPay.toFixed(2)),
+                description: description,
                 payment_method_id: 'pix',
                 payer: {
-                    email: user.email,
-                    first_name: user.name.split(' ')[0],
-                    identification: { type: 'CPF', number: user.cpf.replace(/\D/g, '') }
+                    email: creditData.user.email,
+                    first_name: creditData.user.name.split(' ')[0],
+                    identification: { type: 'CPF', number: creditData.user.cpf.replace(/\D/g, '') }
                 },
                 external_reference: externalReference,
             }
@@ -74,7 +113,6 @@ exports.createInvoicePixPayment = async (req, res) => {
 
         const result = await payment.create(paymentData);
         
-        // Enviamos os dados do PIX para o frontend
         res.status(201).json({
             paymentId: result.id,
             pix_qr_code: result.point_of_interaction.transaction_data.qr_code_base64,
@@ -87,6 +125,47 @@ exports.createInvoicePixPayment = async (req, res) => {
     }
 };
 
+exports.closeAndCreateInvoice = async (req, res) => {
+    const { userId } = req.params;
+    const dbClient = await pool.connect();
+
+    try {
+        await dbClient.query('BEGIN');
+
+        const userResult = await dbClient.query('SELECT * FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
+        
+        const user = userResult.rows[0];
+        const creditUsed = parseFloat(user.credit_used);
+
+        if (creditUsed <= 0) throw new Error('Não há saldo devedor para criar uma fatura.');
+
+        const today = new Date();
+        let dueDate = new Date(today.getFullYear(), today.getMonth(), user.credit_due_day);
+        if (today.getDate() >= user.credit_due_day) {
+            dueDate.setMonth(dueDate.getMonth() + 1);
+        }
+
+        await dbClient.query(
+            `INSERT INTO credit_invoices (user_id, amount, due_date, status) VALUES ($1, $2, $3, 'open')`,
+            [userId, creditUsed, dueDate]
+        );
+
+        // Zera o crédito usado para o próximo ciclo
+        await dbClient.query('UPDATE users SET credit_used = 0 WHERE id = $1', [userId]);
+
+        await dbClient.query('COMMIT');
+        res.status(201).json({ message: 'Fatura fechada e criada com sucesso!' });
+
+    } catch (error) {
+        await dbClient.query('ROLLBACK');
+        console.error(`Erro ao fechar fatura para o utilizador ${userId}:`, error);
+        res.status(400).json({ message: error.message });
+    } finally {
+        dbClient.release();
+    }
+};
+
 exports.getInvoicesForUser = async (req, res) => {
     const { userId } = req.params;
     try {
@@ -96,7 +175,7 @@ exports.getInvoicesForUser = async (req, res) => {
         );
         res.status(200).json(rows);
     } catch (error) {
-        console.error(`Erro ao buscar faturas para o usuário ${userId}:`, error);
+        console.error(`Erro ao buscar faturas para o utilizador ${userId}:`, error);
         res.status(500).json({ message: 'Erro ao buscar histórico de faturas.' });
     }
 };

@@ -102,3 +102,21 @@ exports.getUnreadTicketsCount = async (req, res) => {
         res.status(500).json({ message: 'Erro ao contar tiquetes.' });
     }
 };
+
+const createSystemTicket = async (userId, message) => {
+    try {
+        await pool.query(
+            "INSERT INTO user_tickets (user_id, sent_by_admin_id, message) VALUES ($1, NULL, $2)",
+            [userId, message]
+        );
+        console.log(`Tiquete automático enviado para o utilizador ${userId}: "${message}"`);
+    } catch (error) {
+        console.error(`Falha ao enviar tiquete automático para o utilizador ${userId}:`, error);
+    }
+};
+
+// Agora, exporte a nova função juntamente com as existentes
+module.exports = {
+    ...exports, // Mantém todas as exportações antigas
+    createSystemTicket // Adiciona a nova função para que outros ficheiros a possam usar
+};

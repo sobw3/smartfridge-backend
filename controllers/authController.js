@@ -3,6 +3,7 @@
 const pool = require('../db');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { createSystemTicket } = require('./ticketController');
 
 // Funções de validação (permanecem as mesmas)
 const validateCPF = (cpf) => {
@@ -64,6 +65,10 @@ exports.register = async (req, res) => {
             "INSERT INTO users (name, cpf, email, password_hash, birth_date, condo_id, apartment, phone_number) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, name, email",
             [name, cpf, email, password_hash, birth_date, condo_id, apartment, phone_number]
         );
+
+        const newUserId = newUser.rows[0].id;
+        const welcomeMessage = `Olá, ${name.split(' ')[0]}! Seja bem-vindo(a) à SmartFridge. Estamos felizes por tê-lo(a) connosco.`;
+        await createSystemTicket(newUserId, welcomeMessage);
         
         res.status(201).json({ message: 'Usuário cadastrado com sucesso!', user: newUser.rows[0] });
     } catch (error) {

@@ -60,19 +60,19 @@ exports.deleteCondominium = async (req, res) => {
 // --- GESTÃO DE PRODUTOS ---
 // (As funções de produtos permanecem as mesmas)
 exports.createProduct = async (req, res) => {
-    // ALTERAÇÃO: Removido 'promotional_price' do corpo, pois será calculado
-    const { name, description, image_url, purchase_price, sale_price, critical_stock_level, promotion_start_date, promotion_end_date } = req.body;
+    // Adicionada 'category'
+    const { name, description, image_url, purchase_price, sale_price, critical_stock_level, promotion_start_date, promotion_end_date, category } = req.body;
     try {
-        // LÓGICA DE CÁLCULO AUTOMÁTICO
         let calculatedPromoPrice = null;
-        if (purchase_price && promotion_start_date && promotion_end_date) {
-            calculatedPromoPrice = parseFloat(purchase_price) * 1.30;
+        const cost = parseFloat(purchase_price);
+        if (!isNaN(cost) && cost > 0 && promotion_start_date && promotion_end_date) {
+            calculatedPromoPrice = cost * 1.10;
         }
 
         const newProduct = await pool.query(
-            `INSERT INTO products (name, description, image_url, purchase_price, sale_price, critical_stock_level, promotional_price, promotion_start_date, promotion_end_date) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-            [name, description, image_url, purchase_price, sale_price, critical_stock_level, calculatedPromoPrice, promotion_start_date || null, promotion_end_date || null]
+            `INSERT INTO products (name, description, image_url, purchase_price, sale_price, critical_stock_level, promotional_price, promotion_start_date, promotion_end_date, category) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+            [name, description, image_url, purchase_price, sale_price, critical_stock_level, calculatedPromoPrice, promotion_start_date || null, promotion_end_date || null, category]
         );
         res.status(201).json(newProduct.rows[0]);
     } catch (error) {
@@ -92,21 +92,21 @@ exports.getProducts = async (req, res) => {
 // FUNÇÃO UPDATE ATUALIZADA
 exports.updateProduct = async (req, res) => {
     const { id } = req.params;
-    // ALTERAÇÃO: Removido 'promotional_price' do corpo
-    const { name, description, image_url, purchase_price, sale_price, critical_stock_level, promotion_start_date, promotion_end_date } = req.body;
+    // Adicionada 'category'
+    const { name, description, image_url, purchase_price, sale_price, critical_stock_level, promotion_start_date, promotion_end_date, category } = req.body;
     try {
-        // LÓGICA DE CÁLCULO AUTOMÁTICO
         let calculatedPromoPrice = null;
-        if (purchase_price && promotion_start_date && promotion_end_date) {
-            calculatedPromoPrice = parseFloat(purchase_price) * 1.30;
+        const cost = parseFloat(purchase_price);
+        if (!isNaN(cost) && cost > 0 && promotion_start_date && promotion_end_date) {
+            calculatedPromoPrice = cost * 1.10;
         }
 
         const updatedProduct = await pool.query(
             `UPDATE products SET 
                 name = $1, description = $2, image_url = $3, purchase_price = $4, sale_price = $5, 
-                critical_stock_level = $6, promotional_price = $7, promotion_start_date = $8, promotion_end_date = $9
-             WHERE id = $10 RETURNING *`,
-            [name, description, image_url, purchase_price, sale_price, critical_stock_level, calculatedPromoPrice, promotion_start_date || null, promotion_end_date || null, id]
+                critical_stock_level = $6, promotional_price = $7, promotion_start_date = $8, promotion_end_date = $9, category = $10
+             WHERE id = $11 RETURNING *`,
+            [name, description, image_url, purchase_price, sale_price, critical_stock_level, calculatedPromoPrice, promotion_start_date || null, promotion_end_date || null, category, id]
         );
         res.status(200).json(updatedProduct.rows[0]);
     } catch (error) {
@@ -114,6 +114,7 @@ exports.updateProduct = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
 
 exports.deleteProduct = async (req, res) => {
     const { id } = req.params;
@@ -210,67 +211,72 @@ exports.getSalesSummaryAndLog = async (req, res) => {
 
         if (startDate && endDate) {
             paramCounter++;
-            dateFilter = `AND created_at BETWEEN $${paramCounter}`;
-            queryParams.push(startDate);
-            paramCounter++;
-            dateFilter += ` AND $${paramCounter}`;
-            queryParams.push(endDate);
+            dateFilter = `AND o.created_at BETWEEN $${paramCounter} AND $${paramCounter + 1}`;
+            queryParams.push(startDate, endDate);
         }
 
+        // --- INÍCIO DA NOVA LÓGICA ---
+        // Consulta para o log de transações, agora com detalhes dos itens e lucro
         const logQuery = `
-            SELECT * FROM (
-                -- Vendas de produtos
-                SELECT 
-                    o.id, 
-                    o.total_amount AS amount, 
-                    'Venda' AS type,
-                    o.payment_method,
-                    o.created_at, 
-                    u.name AS user_name, 
-                    u.cpf AS user_cpf
-                FROM orders o
-                JOIN users u ON o.user_id = u.id
-                WHERE o.condo_id = $1 AND o.status = 'paid'
-
-                UNION ALL
-
-                -- Depósitos na carteira
-                SELECT 
-                    wt.id, 
-                    wt.amount, 
-                    'Depósito' AS type,
-                    wt.payment_gateway_id AS payment_method, -- Simplificado
-                    wt.created_at, 
-                    u.name AS user_name, 
-                    u.cpf AS user_cpf
-                FROM wallet_transactions wt
-                JOIN users u ON wt.user_id = u.id
-                WHERE u.condo_id = $1 AND wt.type = 'deposit'
-            ) AS entries
-            WHERE 1=1 ${dateFilter.replace('created_at', 'entries.created_at')}
-            ORDER BY created_at DESC
-            LIMIT $${paramCounter + 1} OFFSET $${paramCounter + 2};
+            SELECT 
+                o.id, 
+                o.total_amount AS amount, 
+                o.payment_method,
+                o.created_at, 
+                u.name AS user_name, 
+                u.cpf AS user_cpf,
+                -- Calcula o lucro líquido total para esta venda específica
+                SUM(oi.quantity * (oi.price_at_purchase - p.purchase_price)) AS net_profit,
+                -- Agrega todos os itens da venda num único campo JSON
+                json_agg(
+                    json_build_object(
+                        'product_name', p.name,
+                        'quantity', oi.quantity,
+                        'price', oi.price_at_purchase
+                    )
+                ) AS items
+            FROM orders o
+            JOIN users u ON o.user_id = u.id
+            JOIN order_items oi ON o.id = oi.order_id
+            JOIN products p ON oi.product_id = p.id
+            WHERE o.condo_id = $1 AND o.status = 'paid' ${dateFilter}
+            GROUP BY o.id, u.id
+            ORDER BY o.created_at DESC
+            LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2};
         `;
-        
-        const logQueryParams = [...queryParams, limit, offset];
-        const logResult = await pool.query(logQuery, logQueryParams);
+        const logResult = await pool.query(logQuery, [...queryParams, limit, offset]);
 
-        const totalCountQuery = `
-            SELECT COUNT(*)::int FROM (
-                SELECT created_at FROM orders o WHERE o.condo_id = $1 AND o.status = 'paid'
-                UNION ALL
-                SELECT wt.created_at FROM wallet_transactions wt JOIN users u ON wt.user_id = u.id WHERE u.condo_id = $1 AND wt.type = 'deposit'
-            ) AS entries
-            WHERE 1=1 ${dateFilter.replace('created_at', 'entries.created_at')};
+        // Consulta para as métricas de resumo no topo da página
+        const summaryQuery = `
+            SELECT
+                COALESCE(SUM(o.total_amount), 0)::float AS total_revenue,
+                COUNT(o.id) AS total_orders,
+                COALESCE(SUM(sub.profit), 0)::float AS total_net_profit
+            FROM orders o
+            LEFT JOIN (
+                SELECT 
+                    oi.order_id, 
+                    SUM(oi.quantity * (oi.price_at_purchase - p.purchase_price)) as profit 
+                FROM order_items oi
+                JOIN products p ON oi.product_id = p.id
+                GROUP BY oi.order_id
+            ) as sub ON o.id = sub.order_id
+            WHERE o.condo_id = $1 AND o.status = 'paid' ${dateFilter};
         `;
+        const summaryResult = await pool.query(summaryQuery, queryParams);
+
+        // Consulta para a contagem total para a paginação
+        const totalCountQuery = `SELECT COUNT(id) FROM orders o WHERE o.condo_id = $1 AND o.status = 'paid' ${dateFilter};`;
         const totalCountResult = await pool.query(totalCountQuery, queryParams);
+        // --- FIM DA NOVA LÓGICA ---
 
         res.status(200).json({
             log: logResult.rows,
+            summary: summaryResult.rows[0],
             pagination: {
                 page: parseInt(page, 10),
                 limit: parseInt(limit, 10),
-                total: totalCountResult.rows[0].count
+                total: parseInt(totalCountResult.rows[0].count, 10)
             }
         });
     } catch (error) {
@@ -406,3 +412,126 @@ exports.toggleUserStatus = async (req, res) => {
     }
 };
 
+exports.getInventoryAnalysis = async (req, res) => {
+    const { condoId } = req.query;
+    if (!condoId) {
+        return res.status(400).json({ message: 'O ID do condomínio é obrigatório.' });
+    }
+
+    try {
+        const query = `
+            SELECT
+                p.id, p.name, p.image_url, p.purchase_price, p.sale_price, p.critical_stock_level,
+                i.quantity AS current_stock,
+                (i.quantity * p.purchase_price) AS total_cost_in_stock,
+                (i.quantity * (p.sale_price - p.purchase_price)) AS potential_net_profit,
+                (
+                    SELECT COALESCE(SUM(oi.quantity), 0)::int
+                    FROM order_items oi
+                    JOIN orders o ON oi.order_id = o.id
+                    WHERE oi.product_id = p.id AND o.condo_id = $1 AND o.status = 'paid' AND o.created_at >= NOW() - INTERVAL '30 days'
+                ) AS units_sold_last_30_days,
+                (
+                    SELECT COALESCE(SUM(oi.quantity * (oi.price_at_purchase - p.purchase_price)), 0)
+                    FROM order_items oi
+                    JOIN orders o ON oi.order_id = o.id
+                    WHERE oi.product_id = p.id AND o.condo_id = $1 AND o.status = 'paid' AND o.created_at >= NOW() - INTERVAL '30 days'
+                ) AS net_profit_last_30_days
+            FROM products p
+            JOIN inventory i ON p.id = i.product_id
+            WHERE i.condo_id = $1
+            ORDER BY p.name;
+        `;
+        
+        const { rows: analysisData } = await pool.query(query, [condoId]);
+
+        // --- LÓGICA DA "IA": Processamento dos dados para gerar insights ---
+        
+        // Clona e ordena os produtos por mais vendidos
+        const sortedBySales = [...analysisData].sort((a, b) => b.units_sold_last_30_days - a.units_sold_last_30_days);
+        
+        // Pega os 3 mais vendidos
+        const topSellers = sortedBySales.slice(0, 3);
+        
+        // Pega os 3 menos vendidos (que ainda venderam pelo menos 1 unidade)
+        const lowSellers = sortedBySales.filter(p => p.units_sold_last_30_days > 0).slice(-3);
+
+        // Sugestões de promoção são os produtos com as menores vendas (incluindo zero vendas)
+        const promotionSuggestions = [...analysisData]
+            .sort((a, b) => a.units_sold_last_30_days - b.units_sold_last_30_days)
+            .slice(0, 3);
+            
+        // Monta o objeto de resposta final
+        const responsePayload = {
+            analysis: analysisData,
+            insights: {
+                topSellers,
+                lowSellers,
+                promotionSuggestions
+            }
+        };
+
+        res.status(200).json(responsePayload);
+
+    } catch (error) {
+        console.error("Erro ao gerar análise de inventário:", error);
+        res.status(500).json({ message: 'Erro ao gerar análise de inventário.' });
+    }
+};
+
+exports.getDashboardStats = async (req, res) => {
+    try {
+        // Métrica 1: Faturamento e Pedidos de Hoje (também corrigida para usar o fuso horário)
+        const todayStatsQuery = `
+            SELECT
+                COALESCE(SUM(total_amount), 0)::float AS revenue_today,
+                COUNT(id) AS orders_today
+            FROM orders
+            WHERE status = 'paid' AND created_at >= (NOW() AT TIME ZONE 'America/Sao_Paulo')::date;
+        `;
+        const todayStatsResult = await pool.query(todayStatsQuery);
+
+        // Métrica 2: Novos Utilizadores Hoje e Total (também corrigida para usar o fuso horário)
+        const userStatsQuery = `
+            SELECT
+                COUNT(id) AS total_users,
+                SUM(CASE WHEN created_at >= (NOW() AT TIME ZONE 'America/Sao_Paulo')::date THEN 1 ELSE 0 END)::int AS new_users_today
+            FROM users;
+        `;
+        const userStatsResult = await pool.query(userStatsQuery);
+
+        // --- INÍCIO DA CORREÇÃO PRINCIPAL ---
+        // Métrica 3: Vendas dos Últimos 7 Dias (consulta robusta com fuso horário)
+        const salesLast7DaysQuery = `
+            SELECT 
+                TO_CHAR(day_series.day, 'DD/MM') AS date,
+                COALESCE(SUM(o.total_amount), 0)::float AS total
+            FROM 
+                GENERATE_SERIES(
+                    (NOW() AT TIME ZONE 'America/Sao_Paulo')::date - 6,
+                    (NOW() AT TIME ZONE 'America/Sao_Paulo')::date,
+                    '1 day'
+                ) AS day_series(day)
+            LEFT JOIN 
+                orders o ON (o.created_at AT TIME ZONE 'America/Sao_Paulo')::date = day_series.day AND o.status = 'paid'
+            GROUP BY 
+                day_series.day
+            ORDER BY 
+                day_series.day ASC;
+        `;
+        // --- FIM DA CORREÇÃO PRINCIPAL ---
+        const salesLast7DaysResult = await pool.query(salesLast7DaysQuery);
+
+        const stats = {
+            ...todayStatsResult.rows[0],
+            ...userStatsResult.rows[0],
+            sales_last_7_days: salesLast7DaysResult.rows
+        };
+
+        res.status(200).json(stats);
+
+    } catch (error) {
+        console.error("Erro ao buscar estatísticas do dashboard:", error);
+        res.status(500).json({ message: 'Erro ao buscar estatísticas do dashboard.' });
+    }
+};

@@ -243,12 +243,23 @@ exports.createCreditPaymentOrder = async (req, res) => {
         const fridgeId = await validateAndGetFridgeId(dbClient, userId);
         const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
 
-        const userResult = await dbClient.query('SELECT credit_limit, credit_used, condo_id FROM users WHERE id = $1 FOR UPDATE', [userId]);
+               const userResult = await dbClient.query('SELECT credit_limit, credit_used FROM users WHERE id = $1 FOR UPDATE', [userId]);
         const currentUser = userResult.rows[0];
 
-        const availableCredit = parseFloat(currentUser.credit_limit) - parseFloat(currentUser.credit_used);
+        // 2. Busca a soma de todas as faturas pendentes (abertas ou atrasadas)
+        const invoicesResult = await dbClient.query(
+            "SELECT COALESCE(SUM(amount), 0)::float AS total FROM credit_invoices WHERE user_id = $1 AND status IN ('open', 'late')",
+            [userId]
+        );
+        const pendingInvoicesAmount = invoicesResult.rows[0].total;
+
+        // 3. Calcula a dívida total e o crédito realmente disponível
+        const totalDebt = parseFloat(currentUser.credit_used) + pendingInvoicesAmount;
+        const availableCredit = parseFloat(currentUser.credit_limit) - totalDebt;
+
+        // 4. Valida se o utilizador tem crédito suficiente para a compra atual
         if (availableCredit < totalAmount) {
-            throw new Error('Limite de crédito insuficiente.');
+            throw new Error('Limite de crédito insuficiente. Pague suas faturas pendentes para liberar mais limite.');
         }
 
         await dbClient.query('UPDATE users SET credit_used = credit_used + $1 WHERE id = $2', [totalAmount, userId]);

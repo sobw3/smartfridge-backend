@@ -9,14 +9,10 @@ exports.getProductsByCondo = async (req, res) => {
     }
 
     try {
-        // Query inteligente que verifica se a promoção está ativa
         const query = `
             SELECT
-                p.id,
-                p.name,
-                p.description,
-                p.image_url,
-                i.quantity AS stock,
+                p.id, p.name, p.description, p.image_url, p.category,
+                COALESCE(i.quantity, 0) AS stock,
                 CASE
                     WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
                     THEN p.promotional_price
@@ -29,17 +25,31 @@ exports.getProductsByCondo = async (req, res) => {
                 END AS original_price,
                 CASE
                     WHEN p.promotional_price IS NOT NULL AND NOW() BETWEEN p.promotion_start_date AND p.promotion_end_date
-                    THEN p.promotion_end_date
-                    ELSE NULL
-                END AS promotion_end_date
+                    THEN TRUE
+                    ELSE FALSE
+                END AS is_on_sale
             FROM products AS p
             JOIN inventory AS i ON p.id = i.product_id
-            WHERE i.condo_id = $1 AND i.quantity > 0
-            ORDER BY p.name ASC;
+            WHERE i.condo_id = $1
+            ORDER BY
+                p.category, -- Agrupa por categoria
+                is_on_sale DESC, -- Promoções primeiro dentro da categoria
+                p.name ASC;
         `;
 
         const productsResult = await pool.query(query, [condoId]);
-        res.status(200).json(productsResult.rows);
+
+        // --- LÓGICA DE AGRUPAMENTO POR CATEGORIA ---
+        const groupedProducts = productsResult.rows.reduce((acc, product) => {
+            const category = product.category || 'Outros'; // Agrupa produtos sem categoria em 'Outros'
+            if (!acc[category]) {
+                acc[category] = [];
+            }
+            acc[category].push(product);
+            return acc;
+        }, {});
+
+        res.status(200).json(groupedProducts);
 
     } catch (error) {
         console.error('Erro ao buscar produtos:', error.message);

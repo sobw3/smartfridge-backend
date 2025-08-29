@@ -8,6 +8,7 @@ const creditController = require('../controllers/creditController');
 
 // Login
 router.post('/login', adminController.loginAdmin);
+router.get('/dashboard-stats', protectAdmin, adminController.getDashboardStats);
 
 // Condomínios
 router.post('/condominiums', protectAdmin, adminController.createCondominium);
@@ -29,6 +30,7 @@ router.get('/promotions/daily', protectAdmin, promotionController.getDailyPromot
 router.get('/inventory', protectAdmin, adminController.getInventoryByCondo);
 router.post('/inventory', protectAdmin, adminController.updateInventory);
 router.get('/critical-stock', protectAdmin, adminController.getCriticalStock);
+router.get('/inventory-analysis', protectAdmin, adminController.getInventoryAnalysis);
 
 // Relatórios
 router.get('/profits', protectAdmin, adminController.getProfitReport);
@@ -40,6 +42,7 @@ router.get('/users-paginated', protectAdmin, adminController.getUsersByCondoPagi
 router.put('/users/:id', protectAdmin, adminController.updateUserByAdmin);
 router.post('/users/:id/add-balance', protectAdmin, adminController.addWalletBalanceByAdmin);
 router.post('/users/:id/toggle-status', protectAdmin, adminController.toggleUserStatus);
+router.post('/users/:userId/close-invoice', protectAdmin, creditController.closeAndCreateInvoice);
 
 // Tiquetes (Admin)
 router.post('/users/:userId/tickets', protectAdmin, ticketController.createTicketForUser);
