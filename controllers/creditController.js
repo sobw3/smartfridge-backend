@@ -7,6 +7,7 @@ const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCE
 const payment = new Payment(client);
 
 // --- LÓGICA DE CÁLCULO CENTRALIZADA E CORRIGIDA ---
+// Esta função agora é 'async' para permitir o 'await' e foi renomeada para clareza
 async function getCreditData(userId) {
     // 1. Busca dados do utilizador
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
@@ -53,6 +54,7 @@ async function getCreditData(userId) {
         }
     }
 
+    // O objeto de retorno foi corrigido para ser um objeto JavaScript válido
     return {
         user,
         currentSpending,
