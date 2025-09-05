@@ -7,9 +7,8 @@ const crypto = require('crypto');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
-// --- FUNÇÕES AUXILIARES ---
-
-// CORREÇÃO: Esta função agora busca o fridge_id com base no ID do condomínio da COMPRA.
+// --- FUNÇÃO AUXILIAR CORRIGIDA ---
+// Esta função agora busca o fridge_id com base no ID do condomínio da COMPRA, e não do usuário.
 const getFridgeIdByCondo = async (dbClient, condoId) => {
     if (!condoId) throw new Error('O ID do Condomínio é necessário para encontrar a geladeira.');
     
@@ -20,8 +19,8 @@ const getFridgeIdByCondo = async (dbClient, condoId) => {
     return condoResult.rows[0].fridge_id;
 };
 
-const createPaymentDescription = async (items, user) => {
-    const condoResult = await pool.query('SELECT name FROM condominiums WHERE id = $1', [user.condoId]);
+const createPaymentDescription = async (items, user, condoId) => {
+    const condoResult = await pool.query('SELECT name FROM condominiums WHERE id = $1', [condoId]);
     const condoName = condoResult.rows[0]?.name || 'Condomínio';
     const itemsSummary = items.map(item => `${item.quantity}x ${item.name}`).join(', ');
     
@@ -73,11 +72,9 @@ exports.createWalletPaymentOrder = async (req, res) => {
 
         await dbClient.query(`INSERT INTO wallet_transactions (user_id, type, amount, related_order_id, description) VALUES ($1, 'purchase', $2, $3, $4)`, [userId, totalAmount, orderId, description]);
 
-        // ALTERAÇÃO: Troca a criação de 'unlock_tokens' por 'unlock_commands'
         await dbClient.query('INSERT INTO unlock_commands (fridge_id) VALUES ($1)', [fridgeId]);
         
         await dbClient.query('COMMIT');
-        // ALTERAÇÃO: Remove o 'unlockToken' da resposta
         res.status(201).json({ message: 'Compra com saldo realizada com sucesso!', orderId: orderId });
 
     } catch (error) {
@@ -90,7 +87,6 @@ exports.createWalletPaymentOrder = async (req, res) => {
 };
 
 exports.createPixOrder = async (req, res) => {
-    // CORREÇÃO: Recebe o condoId da compra
     const { items, user, condoId } = req.body;
     if (!items || items.length === 0 || !user || !user.cpf || !condoId) {
         return res.status(400).json({ message: 'Dados do pedido, do utilizador (incluindo CPF) ou do condomínio são inválidos.' });
@@ -100,11 +96,9 @@ exports.createPixOrder = async (req, res) => {
     try {
         await dbClient.query('BEGIN');
         
-        // CORREÇÃO: Usa a nova função auxiliar com o condoId da compra
         const fridgeId = await getFridgeIdByCondo(dbClient, condoId);
         let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
         
-        // CORREÇÃO: O pedido agora é registado com o condoId e fridgeId corretos
         const newOrder = await dbClient.query(
             'INSERT INTO orders (user_id, condo_id, total_amount, status, payment_method, fridge_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
             [user.id, condoId, totalAmount, 'pending', 'pix', fridgeId]
@@ -117,7 +111,7 @@ exports.createPixOrder = async (req, res) => {
 
         await dbClient.query('COMMIT');
 
-        const description = await createPaymentDescription(items, user);
+        const description = await createPaymentDescription(items, user, condoId);
 
         const paymentData = {
             body: {
@@ -128,10 +122,7 @@ exports.createPixOrder = async (req, res) => {
                     email: user.email,
                     first_name: user.name.split(' ')[0],
                     last_name: user.name.split(' ').slice(1).join(' ') || user.name.split(' ')[0],
-                    identification: {
-                        type: 'CPF',
-                        number: user.cpf.replace(/\D/g, '')
-                    }
+                    identification: { type: 'CPF', number: user.cpf.replace(/\D/g, '') }
                 },
                 external_reference: orderId.toString(),
             }
@@ -162,7 +153,6 @@ exports.createCardOrder = async (req, res) => {
     try {
         await clientDB.query('BEGIN');
         
-        // CORREÇÃO: Usa a nova função auxiliar com o condoId da compra
         const fridgeId = await getFridgeIdByCondo(clientDB, condoId);
         let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
         
@@ -171,14 +161,27 @@ exports.createCardOrder = async (req, res) => {
             [user.id, condoId, totalAmount, 'pending', 'card', fridgeId]
         );
         const orderId = newOrder.rows[0].id;
-
         for (const item of items) {
             await clientDB.query('INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)', [orderId, item.id, item.quantity, item.sale_price]);
         }
 
-        const description = await createPaymentDescription(items, user);
+        const description = await createPaymentDescription(items, user, condoId);
 
-        const paymentData = { /* ... (objeto paymentData permanece igual) ... */ };
+        const paymentData = {
+            body: {
+                transaction_amount: totalAmount,
+                description: description,
+                token: token,
+                installments: installments,
+                payment_method_id: payment_method_id,
+                issuer_id: issuer_id,
+                payer: {
+                    email: user.email,
+                    identification: { type: 'CPF', number: user.cpf.replace(/\D/g, '') }
+                },
+                external_reference: orderId.toString(),
+            }
+        };
         const paymentResult = await payment.create(paymentData);
 
         if (paymentResult.status === 'approved') {
@@ -187,11 +190,9 @@ exports.createCardOrder = async (req, res) => {
                 await clientDB.query('UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3', [item.quantity, item.id, condoId]);
             }
             
-            // ALTERAÇÃO: Troca a criação de 'unlock_tokens' por 'unlock_commands'
             await clientDB.query('INSERT INTO unlock_commands (fridge_id) VALUES ($1)', [fridgeId]);
 
             await clientDB.query('COMMIT');
-            // ALTERAÇÃO: Remove o 'unlockToken' da resposta
             res.status(201).json({ status: 'approved', orderId: orderId });
         } else {
             await clientDB.query('ROLLBACK');
@@ -210,17 +211,31 @@ exports.createCreditPaymentOrder = async (req, res) => {
     const userId = req.user.id;
     const { items, condoId } = req.body;
 
-    if (!items || !condoId) { /* ... */ }
+    if (!items || items.length === 0 || !condoId) {
+        return res.status(400).json({ message: 'O carrinho ou o ID do condomínio está vazio.' });
+    }
 
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
 
-        // CORREÇÃO: Usa a nova função auxiliar com o condoId da compra
         const fridgeId = await getFridgeIdByCondo(dbClient, condoId);
         const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
 
-        // ... (lógica de validação de crédito, que já está correta) ...
+        const userResult = await dbClient.query('SELECT credit_limit, credit_used FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        const currentUser = userResult.rows[0];
+
+        const invoicesResult = await dbClient.query(
+            "SELECT COALESCE(SUM(amount), 0)::float AS total FROM credit_invoices WHERE user_id = $1 AND status IN ('open', 'late')",
+            [userId]
+        );
+        const pendingInvoicesAmount = invoicesResult.rows[0].total;
+        const totalDebt = parseFloat(currentUser.credit_used) + pendingInvoicesAmount;
+        const availableCredit = parseFloat(currentUser.credit_limit) - totalDebt;
+
+        if (availableCredit < totalAmount) {
+            throw new Error('Limite de crédito insuficiente. Pague suas faturas pendentes para liberar mais limite.');
+        }
 
         await dbClient.query('UPDATE users SET credit_used = credit_used + $1 WHERE id = $2', [totalAmount, userId]);
 
@@ -230,13 +245,20 @@ exports.createCreditPaymentOrder = async (req, res) => {
         );
         const orderId = newOrder.rows[0].id;
         
-        // ... (lógica para inserir itens e transação) ...
+        let productNames = items.map(item => item.name).join(', ');
+        if (productNames.length > 255) productNames = productNames.substring(0, 252) + '...';
+        const description = `Compra ${productNames}`;
         
-        // ALTERAÇÃO: Troca a criação de 'unlock_tokens' por 'unlock_commands'
+        for (const item of items) {
+            await dbClient.query('INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)', [orderId, item.id, item.quantity, item.sale_price]);
+            await dbClient.query('UPDATE inventory SET quantity = quantity - $1 WHERE product_id = $2 AND condo_id = $3', [item.quantity, item.id, condoId]);
+        }
+
+        await dbClient.query(`INSERT INTO wallet_transactions (user_id, type, amount, related_order_id, description) VALUES ($1, 'credit_purchase', $2, $3, $4)`, [userId, totalAmount, orderId, description]);
+        
         await dbClient.query('INSERT INTO unlock_commands (fridge_id) VALUES ($1)', [fridgeId]);
         
         await dbClient.query('COMMIT');
-        // ALTERAÇÃO: Remove o 'unlockToken' da resposta
         res.status(201).json({ message: 'Compra com crédito realizada com sucesso!', orderId: orderId });
 
     } catch (error) {
@@ -307,4 +329,3 @@ exports.confirmDoorOpened = async (req, res) => {
 exports.getActiveQRCodes = async (req, res) => {
     res.status(410).json({ message: "Esta funcionalidade foi descontinuada." });
 };
-
