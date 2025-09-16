@@ -7,18 +7,24 @@ const crypto = require('crypto');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
-// --- FUNÇÃO AUXILIAR CORRIGIDA ---
-// Esta função agora busca o fridge_id com base no ID do condomínio da COMPRA, e não do usuário.
-const getFridgeIdByCondo = async (dbClient, condoId) => {
-    if (!condoId) throw new Error('O ID do Condomínio é necessário para encontrar a geladeira.');
-    
-    const condoResult = await dbClient.query('SELECT fridge_id FROM condominiums WHERE id = $1', [condoId]);
+// --- FUNÇÕES AUXILIARES ---
+
+// Valida a geladeira e o usuário
+const validateAndGetFridgeId = async (dbClient, userId) => {
+    const userResult = await dbClient.query('SELECT condo_id FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+        throw new Error('Usuário não encontrado.');
+    }
+    const { condo_id } = userResult.rows[0];
+
+    const condoResult = await dbClient.query('SELECT fridge_id FROM condominiums WHERE id = $1', [condo_id]);
     if (condoResult.rows.length === 0 || !condoResult.rows[0].fridge_id) {
-        throw new Error(`Condomínio ${condoId} não encontrado ou nenhuma geladeira associada a ele.`);
+        throw new Error('Condomínio não encontrado ou nenhuma geladeira associada a ele.');
     }
     return condoResult.rows[0].fridge_id;
 };
 
+// Cria a descrição detalhada para o Mercado Pago
 const createPaymentDescription = async (items, user, condoId) => {
     const condoResult = await pool.query('SELECT name FROM condominiums WHERE id = $1', [condoId]);
     const condoName = condoResult.rows[0]?.name || 'Condomínio';
@@ -33,18 +39,20 @@ const createPaymentDescription = async (items, user, condoId) => {
 
 exports.createWalletPaymentOrder = async (req, res) => {
     const userId = req.user.id;
-    const { items, condoId } = req.body;
+    // Alterado para receber fridgeId diretamente para consistência
+    const { items, condoId, fridgeId } = req.body;
 
-    if (!items || items.length === 0 || !condoId) {
-        return res.status(400).json({ message: 'O carrinho ou o ID do condomínio está vazio.' });
+    if (!items || items.length === 0) {
+        return res.status(400).json({ message: 'O carrinho está vazio.' });
+    }
+    if (!condoId || !fridgeId) {
+        return res.status(400).json({ message: 'Dados da sessão de compra (condomínio/geladeira) são obrigatórios.' });
     }
 
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
 
-        // CORREÇÃO: Usa a nova função auxiliar com o condoId da compra
-        const fridgeId = await getFridgeIdByCondo(dbClient, condoId);
         const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
         const userResult = await dbClient.query('SELECT wallet_balance FROM users WHERE id = $1 FOR UPDATE', [userId]);
         const currentUser = userResult.rows[0];
@@ -87,18 +95,20 @@ exports.createWalletPaymentOrder = async (req, res) => {
 };
 
 exports.createPixOrder = async (req, res) => {
-    const { items, user, condoId } = req.body;
-    if (!items || items.length === 0 || !user || !user.cpf || !condoId) {
-        return res.status(400).json({ message: 'Dados do pedido, do utilizador (incluindo CPF) ou do condomínio são inválidos.' });
+    // ***** CORREÇÃO PRINCIPAL APLICADA AQUI *****
+    const { items, user, condoId, fridgeId } = req.body;
+    // Validação mais robusta e explícita
+    if (!items || items.length === 0 || !user || !user.cpf || !condoId || !fridgeId) {
+        return res.status(400).json({ message: 'Dados do pedido, do utilizador (incluindo CPF), do condomínio ou da geladeira são inválidos.' });
     }
     
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
-        
-        const fridgeId = await getFridgeIdByCondo(dbClient, condoId);
+
         let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
         
+        // Usa os dados explícitos recebidos do frontend
         const newOrder = await dbClient.query(
             'INSERT INTO orders (user_id, condo_id, total_amount, status, payment_method, fridge_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
             [user.id, condoId, totalAmount, 'pending', 'pix', fridgeId]
@@ -122,7 +132,10 @@ exports.createPixOrder = async (req, res) => {
                     email: user.email,
                     first_name: user.name.split(' ')[0],
                     last_name: user.name.split(' ').slice(1).join(' ') || user.name.split(' ')[0],
-                    identification: { type: 'CPF', number: user.cpf.replace(/\D/g, '') }
+                    identification: {
+                        type: 'CPF',
+                        number: user.cpf.replace(/\D/g, '')
+                    }
                 },
                 external_reference: orderId.toString(),
             }
@@ -144,8 +157,8 @@ exports.createPixOrder = async (req, res) => {
 };
 
 exports.createCardOrder = async (req, res) => {
-    const { items, user, token, issuer_id, payment_method_id, installments, condoId } = req.body;
-    if (!items || !token || !payment_method_id || !user || !user.cpf || !condoId) {
+    const { items, user, token, issuer_id, payment_method_id, installments, condoId, fridgeId } = req.body;
+    if (!items || !token || !payment_method_id || !user || !user.cpf || !condoId || !fridgeId) {
         return res.status(400).json({ message: 'Dados de pagamento, do utilizador ou da sessão de compra estão incompletos.' });
     }
     
@@ -153,7 +166,6 @@ exports.createCardOrder = async (req, res) => {
     try {
         await clientDB.query('BEGIN');
         
-        const fridgeId = await getFridgeIdByCondo(clientDB, condoId);
         let totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
         
         const newOrder = await clientDB.query(
@@ -161,6 +173,7 @@ exports.createCardOrder = async (req, res) => {
             [user.id, condoId, totalAmount, 'pending', 'card', fridgeId]
         );
         const orderId = newOrder.rows[0].id;
+
         for (const item of items) {
             await clientDB.query('INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES ($1, $2, $3, $4)', [orderId, item.id, item.quantity, item.sale_price]);
         }
@@ -209,17 +222,20 @@ exports.createCardOrder = async (req, res) => {
 
 exports.createCreditPaymentOrder = async (req, res) => {
     const userId = req.user.id;
-    const { items, condoId } = req.body;
+    // Alterado para receber fridgeId diretamente para consistência
+    const { items, condoId, fridgeId } = req.body;
 
-    if (!items || items.length === 0 || !condoId) {
-        return res.status(400).json({ message: 'O carrinho ou o ID do condomínio está vazio.' });
+    if (!items || items.length === 0) {
+        return res.status(400).json({ message: 'O carrinho está vazio.' });
+    }
+    if (!condoId || !fridgeId) {
+        return res.status(400).json({ message: 'Dados da sessão de compra (condomínio/geladeira) são obrigatórios.' });
     }
 
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
 
-        const fridgeId = await getFridgeIdByCondo(dbClient, condoId);
         const totalAmount = items.reduce((sum, item) => sum + parseFloat(item.sale_price) * item.quantity, 0);
 
         const userResult = await dbClient.query('SELECT credit_limit, credit_used FROM users WHERE id = $1 FOR UPDATE', [userId]);
@@ -230,6 +246,7 @@ exports.createCreditPaymentOrder = async (req, res) => {
             [userId]
         );
         const pendingInvoicesAmount = invoicesResult.rows[0].total;
+
         const totalDebt = parseFloat(currentUser.credit_used) + pendingInvoicesAmount;
         const availableCredit = parseFloat(currentUser.credit_limit) - totalDebt;
 
@@ -269,6 +286,8 @@ exports.createCreditPaymentOrder = async (req, res) => {
         dbClient.release();
     }
 };
+
+// --- FUNÇÕES DE STATUS (Sem alterações) ---
 
 exports.getOrderStatus = async (req, res) => {
     const { orderId } = req.params;
