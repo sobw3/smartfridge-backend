@@ -3,6 +3,7 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
+const ttsRoutes = require('./routes/ttsRoutes');
 
 // Importar TODAS as suas rotas
 const authRoutes = require('./routes/auth');
@@ -46,6 +47,7 @@ app.use('/api/wallet', walletRoutes);
 app.use('/api/admin/central-cashier', cashierRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/credit', creditRoutes);
+app.use('/api/tts', ttsRoutes); // A URL base será /api/tts
 
 
 // Rota de teste
@@ -64,4 +66,5 @@ app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     // O agendador de promoções permanece desativado como solicitado.
     // promotionScheduler.start();
+
 });
