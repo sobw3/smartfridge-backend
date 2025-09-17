@@ -4,6 +4,91 @@ const { MercadoPagoConfig, Payment } = require('mercadopago');
 const client = new MercadoPagoConfig({ accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN });
 const payment = new Payment(client);
 
+// FUNÇÃO ADICIONADA: Necessária para o feed de "Atividade Recente" na WalletPage
+exports.getRecentTransactions = async (req, res) => {
+    const userId = req.user.id;
+    try {
+        const query = `
+            SELECT * FROM (
+                SELECT 
+                    id, created_at, 'purchase' as type, 
+                    'Compra SmartFridge' as description, amount * -1 as amount 
+                FROM wallet_transactions WHERE user_id = $1 AND type = 'purchase'
+                UNION ALL
+                SELECT 
+                    id, created_at, type, description, 
+                    CASE WHEN type = 'transfer_out' THEN amount * -1 ELSE amount END as amount 
+                FROM wallet_transactions WHERE user_id = $1 AND type != 'purchase'
+            ) as recent_activity
+            ORDER BY created_at DESC
+            LIMIT 5;
+        `;
+        const { rows } = await pool.query(query, [userId]);
+        res.status(200).json(rows);
+    } catch (error) {
+        console.error('Erro ao buscar transações recentes:', error);
+        res.status(500).json({ message: 'Erro ao buscar transações recentes.' });
+    }
+};
+
+// FUNÇÃO DE DEPÓSITO COM CARTÃO - VERSÃO FINAL E CORRIGIDA PARA O FORMULÁRIO PERSONALIZADO
+exports.depositWithCard = async (req, res) => {
+    const userId = req.user.id;
+    const { token, amount, cardholderName, cardholderCpf } = req.body;
+    const depositAmount = parseFloat(amount);
+
+    if (!token || !depositAmount || depositAmount <= 0 || !cardholderName || !cardholderCpf) {
+        return res.status(400).json({ message: 'Dados de pagamento incompletos ou valor inválido.' });
+    }
+
+    const dbClient = await pool.connect();
+    try {
+        await dbClient.query('BEGIN');
+        const userResult = await dbClient.query('SELECT email FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
+        const user = userResult.rows[0];
+
+        const paymentData = {
+            body: {
+                transaction_amount: depositAmount,
+                description: `Depósito na carteira SmartFridge`,
+                token: token,
+                installments: 1,
+                payment_method_id: 'master', // O MP infere a bandeira a partir do token, mas um valor é necessário
+                payer: {
+                    email: user.email,
+                    first_name: cardholderName.split(' ')[0],
+                    last_name: cardholderName.split(' ').slice(1).join(' ') || cardholderName.split(' ')[0],
+                    identification: { type: 'CPF', number: cardholderCpf.replace(/\D/g, '') }
+                }
+            }
+        };
+        
+        const paymentResult = await payment.create(paymentData);
+        
+        if (paymentResult.status === 'approved') {
+            await dbClient.query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2', [depositAmount, userId]);
+            await dbClient.query(
+                `INSERT INTO wallet_transactions (user_id, type, amount, description, payment_gateway_id) VALUES ($1, 'deposit', $2, $3, $4)`,
+                [userId, depositAmount, 'Depósito via Cartão de Crédito', paymentResult.id.toString()]
+            );
+            await dbClient.query('COMMIT');
+            res.status(200).json({ message: 'Depósito aprovado e saldo adicionado com sucesso!' });
+        } else {
+            await dbClient.query('ROLLBACK');
+            res.status(400).json({ message: `Pagamento recusado: ${paymentResult.status_detail}` });
+        }
+    } catch (error) {
+        await dbClient.query('ROLLBACK');
+        console.error('Erro ao processar depósito com cartão:', error);
+        res.status(500).json({ message: 'Falha ao processar depósito com cartão.' });
+    } finally {
+        dbClient.release();
+    }
+};
+
+// --- RESTO DAS FUNÇÕES DO SEU FICHEIRO ORIGINAL (sem alterações) ---
+
 exports.getWalletBalance = async (req, res) => {
     const userId = req.user.id;
     try {
@@ -54,7 +139,7 @@ exports.createDepositOrder = async (req, res) => {
         const result = await payment.create(paymentData);
         
         res.status(201).json({
-            orderId: result.id, // O ID do pagamento do Mercado Pago
+            orderId: result.id,
             pix_qr_code: result.point_of_interaction.transaction_data.qr_code_base64,
             pix_qr_code_text: result.point_of_interaction.transaction_data.qr_code
         });
@@ -62,63 +147,6 @@ exports.createDepositOrder = async (req, res) => {
     } catch (error) {
         console.error('Erro ao criar depósito PIX no Mercado Pago:', error);
         res.status(500).json({ message: 'Falha ao criar depósito PIX.' });
-    }
-};
-
-// controllers/walletController.js
-
-exports.depositWithCard = async (req, res) => {
-    const userId = req.user.id;
-    const { token, amount, cardholderName, cardholderCpf } = req.body;
-    const depositAmount = parseFloat(amount);
-
-    if (!token || !depositAmount || depositAmount <= 0) {
-        return res.status(400).json({ message: 'Dados de pagamento incompletos ou valor inválido.' });
-    }
-
-    const dbClient = await pool.connect();
-    try {
-        await dbClient.query('BEGIN');
-        const userResult = await dbClient.query('SELECT email FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
-        const user = userResult.rows[0];
-
-        const paymentData = {
-            body: {
-                transaction_amount: depositAmount,
-                description: `Depósito na carteira SmartFridge`,
-                token: token,
-                installments: 1,
-                payment_method_id: 'master', // O MP infere a bandeira a partir do token
-                payer: {
-                    email: user.email,
-                    first_name: cardholderName.split(' ')[0],
-                    last_name: cardholderName.split(' ').slice(1).join(' ') || cardholderName.split(' ')[0],
-                    identification: { type: 'CPF', number: cardholderCpf.replace(/\D/g, '') }
-                }
-            }
-        };
-        
-        const paymentResult = await payment.create(paymentData);
-        
-        if (paymentResult.status === 'approved') {
-            await dbClient.query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id = $2', [depositAmount, userId]);
-            await dbClient.query(
-                `INSERT INTO wallet_transactions (user_id, type, amount, description, payment_gateway_id) VALUES ($1, 'deposit', $2, $3, $4)`,
-                [userId, depositAmount, 'Depósito via Cartão de Crédito', paymentResult.id.toString()]
-            );
-            await dbClient.query('COMMIT');
-            res.status(200).json({ message: 'Depósito aprovado e saldo adicionado com sucesso!' });
-        } else {
-            await dbClient.query('ROLLBACK');
-            res.status(400).json({ message: `Pagamento recusado: ${paymentResult.status_detail}` });
-        }
-    } catch (error) {
-        await dbClient.query('ROLLBACK');
-        console.error('Erro ao processar depósito com cartão:', error);
-        res.status(500).json({ message: 'Falha ao processar depósito com cartão.' });
-    } finally {
-        dbClient.release();
     }
 };
 
@@ -139,14 +167,13 @@ exports.getWalletTransactions = async (req, res) => {
     const offset = (page - 1) * limit;
 
     try {
- const query = `
+        const query = `
             SELECT 
                 wt.id, 
                 wt.type, 
                 wt.amount, 
                 wt.created_at, 
                 wt.description,
-                -- Subquery para somar a quantidade de itens de um pedido
                 (CASE 
                     WHEN wt.type = 'purchase' THEN (
                         SELECT SUM(oi.quantity) 
@@ -178,7 +205,6 @@ exports.getWalletTransactions = async (req, res) => {
         res.status(500).json({ message: 'Erro interno ao buscar histórico da carteira.' });
     }
 };
-
 
 exports.verifyRecipient = async (req, res) => {
     const { recipientEmail } = req.body;
@@ -247,7 +273,6 @@ exports.transferBalance = async (req, res) => {
     }
 };
 
-// PONTO 5: Função de detalhes da transação atualizada
 exports.getTransactionDetails = async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id; 
@@ -266,7 +291,6 @@ exports.getTransactionDetails = async (req, res) => {
         
         let transactionDetails = rows[0];
 
-        // Se for uma compra, busca os itens do pedido
         if ((transactionDetails.type === 'purchase' || transactionDetails.type === 'credit_purchase') && transactionDetails.related_order_id) {
             const itemsQuery = `
                 SELECT oi.quantity, oi.price_at_purchase, p.name as product_name, p.id as product_id
@@ -278,7 +302,6 @@ exports.getTransactionDetails = async (req, res) => {
             transactionDetails.items = items;
         }
 
-        // Se for uma transferência de saída, busca os dados do destinatário
         if (transactionDetails.type === 'transfer_out' && transactionDetails.description) {
             const recipientName = transactionDetails.description.replace('Transferência enviada para ', '');
             const recipientQuery = `
@@ -299,4 +322,3 @@ exports.getTransactionDetails = async (req, res) => {
         res.status(500).json({ message: "Erro ao buscar detalhes do comprovante." });
     }
 };
-
