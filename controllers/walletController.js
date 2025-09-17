@@ -65,40 +65,39 @@ exports.createDepositOrder = async (req, res) => {
     }
 };
 
+// controllers/walletController.js
+
 exports.depositWithCard = async (req, res) => {
     const userId = req.user.id;
-    const { token, issuer_id, payment_method_id, installments, amount } = req.body;
+    // Agora recebemos o TOKEN e os dados do titular do cartão
+    const { token, amount, cardholderName, cardholderCpf } = req.body;
     const depositAmount = parseFloat(amount);
-    const MIN_DEPOSIT = 5.00;
 
-    if (!token || !payment_method_id || !installments || !depositAmount || depositAmount < MIN_DEPOSIT) {
+    if (!token || !depositAmount || depositAmount <= 0) {
         return res.status(400).json({ message: 'Dados de pagamento incompletos ou valor inválido.' });
     }
 
     const dbClient = await pool.connect();
     try {
         await dbClient.query('BEGIN');
-        const userResult = await dbClient.query('SELECT email, cpf FROM users WHERE id = $1', [userId]);
-        if (userResult.rows.length === 0) {
-            throw new Error('Utilizador não encontrado.');
-        }
+        const userResult = await dbClient.query('SELECT email FROM users WHERE id = $1', [userId]);
+        if (userResult.rows.length === 0) throw new Error('Utilizador não encontrado.');
         const user = userResult.rows[0];
-
-        const externalReference = `wallet_deposit_card_${userId}_${Date.now()}`;
 
         const paymentData = {
             body: {
                 transaction_amount: depositAmount,
-                description: `Depósito via Cartão - SmartFridge`,
+                description: `Depósito na carteira SmartFridge`,
                 token: token,
-                installments: installments,
-                payment_method_id: payment_method_id,
-                issuer_id: issuer_id,
+                installments: 1,
+                payment_method_id: 'master', // O MP infere o método (visa, master, etc.) a partir do token
                 payer: {
                     email: user.email,
-                    identification: { type: 'CPF', number: user.cpf.replace(/\D/g, '') }
-                },
-                external_reference: externalReference,
+                    // Usamos os dados que o utilizador digitou no formulário
+                    first_name: cardholderName.split(' ')[0],
+                    last_name: cardholderName.split(' ').slice(1).join(' ') || cardholderName.split(' ')[0],
+                    identification: { type: 'CPF', number: cardholderCpf.replace(/\D/g, '') }
+                }
             }
         };
         
