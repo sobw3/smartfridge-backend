@@ -69,7 +69,6 @@ exports.createDepositOrder = async (req, res) => {
 
 exports.depositWithCard = async (req, res) => {
     const userId = req.user.id;
-    // Agora recebemos o TOKEN e os dados do titular do cartão
     const { token, amount, cardholderName, cardholderCpf } = req.body;
     const depositAmount = parseFloat(amount);
 
@@ -90,10 +89,9 @@ exports.depositWithCard = async (req, res) => {
                 description: `Depósito na carteira SmartFridge`,
                 token: token,
                 installments: 1,
-                payment_method_id: 'master', // O MP infere o método (visa, master, etc.) a partir do token
+                payment_method_id: 'master', // O MP infere a bandeira a partir do token
                 payer: {
                     email: user.email,
-                    // Usamos os dados que o utilizador digitou no formulário
                     first_name: cardholderName.split(' ')[0],
                     last_name: cardholderName.split(' ').slice(1).join(' ') || cardholderName.split(' ')[0],
                     identification: { type: 'CPF', number: cardholderCpf.replace(/\D/g, '') }
