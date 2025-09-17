@@ -6,6 +6,9 @@ const router = express.Router();
 const walletController = require('../controllers/walletController');
 const { protect } = require('../middleware/authMiddleware'); // <-- ESTA LINHA ESTAVA FALTANDO
 
+router.get('/recent-transactions', protect, walletController.getRecentTransactions);
+
+
 // Rota para obter o saldo da carteira (protegida)
 router.get('/balance', protect, walletController.getWalletBalance);
 
